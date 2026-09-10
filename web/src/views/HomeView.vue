@@ -194,8 +194,13 @@ function seatDots(room: RoomSummary): boolean[] {
 
 <style scoped>
 .lobby-page {
-  min-height: 100%;
+  /* 必须是固定高度而非 min-height：内容超高时元素不能再跟着长高，
+     否则 body overflow:hidden 会把超出部分裁剪掉且无法滚动 */
+  height: 100%;
+  height: 100dvh; /* 移动端动态视口，规避地址栏高度抖动 */
   overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
   display: flex;
   flex-direction: column;
   align-items: center;
