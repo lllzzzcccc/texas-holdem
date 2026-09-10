@@ -43,7 +43,37 @@ npm start          # Node 单进程托管前端 + socket.io，默认 :3000
 
 访问 <http://localhost:3000>。
 
-## 部署到服务器（域名访问）
+## Docker 部署（推荐）
+
+服务器只需安装 Docker 与 Docker Compose，无需 Node.js：
+
+```bash
+git clone https://github.com/lllzzzcccc/texas-holdem.git /opt/texas-holdem
+cd /opt/texas-holdem
+# 可选：配置对外端口与地址（默认 80 端口）
+echo 'HTTP_PORT=80
+PUBLIC_URL=http://<你的域名或IP>' > .env
+docker compose up -d --build
+```
+
+- 容器内服务监听 3000，宿主机 `HTTP_PORT` 映射到它（默认 80）
+- `deploy/deploy.sh` 为服务器端一键更新脚本：拉取 main 最新代码 → 重建容器 → 健康检查
+- 后续有域名后，改 `.env` 的 `PUBLIC_URL` 并用 Nginx/Caddy 反代到该端口即可（注意放行 WebSocket `Upgrade` 头）
+
+## CI/CD（GitHub Actions）
+
+推送 `main` 分支即自动：类型检查 → 测试 → 构建 → SSH 到服务器拉代码重建容器（`.github/workflows/deploy.yml`）。
+
+需要在仓库 **Settings → Secrets and variables → Actions** 配置 4 个 secrets：
+
+| Secret | 说明 | 示例 |
+| --- | --- | --- |
+| `SSH_HOST` | 服务器地址 | `8.130.33.67` |
+| `SSH_USER` | SSH 用户 | `root` |
+| `SSH_PRIVATE_KEY` | CI 部署专用私钥（对应公钥已加入服务器 `~/.ssh/authorized_keys`） | `-----BEGIN OPENSSH PRIVATE KEY-----...` |
+| `SSH_PORT` | SSH 端口（可选，默认 22） | `22` |
+
+## 部署到服务器（裸机 Node，不用 Docker 时）
 
 1. 服务器安装 Node.js 20+，克隆仓库后执行上面的生产运行步骤
 2. 配置环境变量（可复制 `.env.example` 为 `.env`，或直接设置系统环境变量）：

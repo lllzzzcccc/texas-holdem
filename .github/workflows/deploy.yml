@@ -1,0 +1,52 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  # ---------- 持续集成：类型检查 + 测试 + 构建 ----------
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 类型检查
+        run: npm run typecheck
+
+      - name: 运行测试
+        run: npm test
+
+      - name: 构建前端
+        run: npm run build
+
+  # ---------- 持续部署：SSH 到服务器执行部署脚本 ----------
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: 部署到生产服务器
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          script: |
+            set -e
+            cd /opt/texas-holdem
+            git fetch origin main
+            git reset --hard origin/main
+            docker compose up -d --build
+            docker image prune -f
+            echo "==> 容器状态："
+            docker ps --filter name=texas-holdem --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
