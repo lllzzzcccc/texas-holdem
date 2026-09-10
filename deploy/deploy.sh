@@ -11,7 +11,9 @@ APP_DIR="${APP_DIR:-/opt/texas-holdem}"
 cd "$APP_DIR"
 
 echo "==> 拉取最新代码"
-git fetch origin main
+# 注意：不要写成 git fetch origin main —— git 1.8 下带 ref 只更新 FETCH_HEAD，
+# 不会更新 refs/remotes/origin/main，会导致 reset 到旧提交
+git fetch origin
 git reset --hard origin/main
 
 echo "==> 重建并重启容器"
