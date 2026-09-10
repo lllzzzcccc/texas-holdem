@@ -3,6 +3,10 @@
 # CI（GitHub Actions）通过 SSH 执行此脚本；也可在服务器上手动运行。
 set -euo pipefail
 
+# 服务器 CentOS 7 自带 git 1.8，不支持 core.sshCommand / GIT_SSH_COMMAND，
+# 用 GIT_SSH 包装脚本指定仓库部署密钥（Deploy key）
+export GIT_SSH="${GIT_SSH:-/root/.ssh/git-ssh-wrapper.sh}"
+
 APP_DIR="${APP_DIR:-/opt/texas-holdem}"
 cd "$APP_DIR"
 

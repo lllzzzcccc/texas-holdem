@@ -43,10 +43,4 @@ jobs:
           port: ${{ secrets.SSH_PORT || 22 }}
           script: |
             set -e
-            cd /opt/texas-holdem
-            git fetch origin main
-            git reset --hard origin/main
-            docker compose up -d --build
-            docker image prune -f
-            echo "==> 容器状态："
-            docker ps --filter name=texas-holdem --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
+            bash /opt/texas-holdem/deploy/deploy.sh
