@@ -3,8 +3,8 @@ import type { ClientToServerEvents, ServerToClientEvents } from '@th/shared';
 
 export type AppSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 
-// 同源连接：开发环境由 Vite 代理 /socket.io 到 :3000，生产同源部署
-export const socket: AppSocket = io({ autoConnect: true });
+// 同源连接：开发环境由 Vite 代理到 :3000，生产由 Nginx 在 /texas-holdem 前缀下反代
+export const socket: AppSocket = io({ autoConnect: true, path: '/texas-holdem/socket.io' });
 
 // ---------- 身份持久化 ----------
 

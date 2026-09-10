@@ -50,15 +50,21 @@ npm start          # Node 单进程托管前端 + socket.io，默认 :3000
 ```bash
 git clone https://github.com/lllzzzcccc/texas-holdem.git /opt/texas-holdem
 cd /opt/texas-holdem
-# 可选：配置对外端口与地址（默认 80 端口）
-echo 'HTTP_PORT=80
-PUBLIC_URL=http://<你的域名或IP>' > .env
+# 配置域名（用于 Nginx server_name、证书签发与二维码链接）
+echo 'DOMAIN=poker.example.com
+PUBLIC_URL=https://poker.example.com/texas-holdem' > .env
 docker compose up -d --build
 ```
 
-- 容器内服务监听 3000，宿主机 `HTTP_PORT` 映射到它（默认 80）
-- `deploy/deploy.sh` 为服务器端一键更新脚本：拉取 main 最新代码 → 重建容器 → 健康检查
-- 后续有域名后，改 `.env` 的 `PUBLIC_URL` 并用 Nginx/Caddy 反代到该端口即可（注意放行 WebSocket `Upgrade` 头）
+架构为三容器：
+
+- **app**：Node 单进程（前端静态产物 + socket.io），只绑定 `127.0.0.1:3000`
+- **nginx**：对外 80/443。80 跳转 HTTPS；`https://域名/texas-holdem/` 反代到 app（剥离前缀，含 WebSocket Upgrade）
+- **certbot**：Let's Encrypt 证书，每 12h 自动续期；nginx 每 6h reload 加载新证书
+
+**首次部署证书签发**：`deploy/deploy.sh` 会自动运行 `deploy/init-letsencrypt.sh`（幂等）——先造 dummy 自签证书让 Nginx 启动，再通过 ACME webroot 签发真实证书并 reload。前提是域名 DNS 已指向服务器且 80/443 端口在安全组放行（大陆机房域名需 ICP 备案）。证书注册邮箱默认 `admin@<域名>`，可用 `.env` 里 `CERTBOT_EMAIL` 覆盖。
+
+**纯 IP 部署（无域名）**：把 compose 里 app 的端口映射改回 `80:3000` 并不启动 nginx/certbot 即可，前端 base 前缀可通过 Nginx 或保持默认。
 
 ## CI/CD（GitHub Actions）
 

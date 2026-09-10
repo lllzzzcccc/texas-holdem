@@ -16,6 +16,9 @@ echo "==> 拉取最新代码"
 git fetch origin
 git reset --hard origin/main
 
+echo "==> 确保证书已签发（首次部署会走 Let's Encrypt 引导流程）"
+bash deploy/init-letsencrypt.sh
+
 echo "==> 重建并重启容器"
 docker compose up -d --build
 
@@ -24,8 +27,7 @@ docker image prune -f > /dev/null
 
 echo "==> 等待健康检查"
 for i in $(seq 1 20); do
-  if curl -sf http://127.0.0.1:3000/api/health > /dev/null 2>&1 \
-    || curl -sf "http://127.0.0.1:${HTTP_PORT:-80}/api/health" > /dev/null 2>&1; then
+  if curl -sf http://127.0.0.1:3000/api/health > /dev/null 2>&1; then
     echo "==> 部署完成 ✅"
     docker ps --filter name=texas-holdem --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
     exit 0
