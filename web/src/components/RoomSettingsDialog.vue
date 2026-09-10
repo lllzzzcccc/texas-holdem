@@ -12,7 +12,18 @@ const blindPreset = ref('10/20');
 const maxSeats = ref(9);
 const turnTimeoutSec = ref(30);
 const maxHands = ref(0);
+const visibility = ref<'public' | 'private'>('public');
+const password = ref('');
+const clearPwd = ref(false);
 const busy = ref(false);
+
+// 切到公共房：密码不再适用，清掉输入/清除标记
+watch(visibility, (v) => {
+  if (v === 'public') {
+    password.value = '';
+    clearPwd.value = false;
+  }
+});
 
 // 打开时用当前房间参数填充
 watch(
@@ -25,11 +36,28 @@ watch(
     turnTimeoutSec.value = Math.round(store.room.turnTimeoutMs / 1000);
     if (!TURN_OPTIONS.includes(turnTimeoutSec.value)) turnTimeoutSec.value = 30;
     maxHands.value = store.room.maxHands;
+    visibility.value = store.room.isPrivate ? 'private' : 'public';
+    password.value = '';
+    clearPwd.value = false;
   },
 );
 
 async function save() {
   if (busy.value) return;
+  // 密码三种状态：公共房强制清除；私密房「勾选清除 / 4 位新密码 / 留空不变」
+  let pwd: string | undefined;
+  if (visibility.value !== 'private') pwd = '';
+  else if (clearPwd.value) pwd = '';
+  else if (password.value) {
+    const p = password.value.trim();
+    if (!/^\d{4}$/.test(p)) {
+      store.toast('房间密码需为 4 位数字');
+      return;
+    }
+    pwd = p;
+  } else {
+    pwd = undefined;
+  }
   busy.value = true;
   const [smallBlind, bigBlind] = blindPreset.value.split('/').map(Number);
   const ok = await store.configureRoom({
@@ -38,6 +66,8 @@ async function save() {
     maxSeats: maxSeats.value,
     turnTimeoutSec: turnTimeoutSec.value,
     maxHands: maxHands.value,
+    isPrivate: visibility.value === 'private',
+    password: pwd,
   });
   busy.value = false;
   if (ok) {
@@ -79,7 +109,31 @@ async function save() {
               <option v-for="h in HAND_OPTIONS" :key="h.value" :value="h.value">{{ h.label }}</option>
             </select>
           </label>
+          <label class="field">
+            <span>房间类型</span>
+            <select v-model="visibility">
+              <option value="public">公共（大厅可见）</option>
+              <option value="private">私密（仅邀请可进）</option>
+            </select>
+          </label>
+          <label v-if="visibility === 'private'" class="field">
+            <span>房间密码 {{ store.room?.hasPassword ? '（已设置）' : '' }}</span>
+            <input
+              v-model="password"
+              type="password"
+              inputmode="numeric"
+              maxlength="4"
+              placeholder="4 位数字"
+              autocomplete="off"
+              :disabled="clearPwd"
+            />
+          </label>
         </div>
+        <p v-if="visibility === 'private'" class="hint">私密房间不会出现在大厅列表，只能通过你分享的房间号或二维码加入</p>
+        <label v-if="store.room?.hasPassword && visibility === 'private'" class="clear-row">
+          <input v-model="clearPwd" type="checkbox" />
+          <span>清除当前密码</span>
+        </label>
 
         <div class="btn-row">
           <button :disabled="busy" @click="save">{{ busy ? '保存中…' : '保存' }}</button>
@@ -134,6 +188,15 @@ h3 {
 }
 .field select {
   width: 100%;
+}
+.clear-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-dim);
+  cursor: pointer;
+  user-select: none;
 }
 .btn-row {
   display: flex;

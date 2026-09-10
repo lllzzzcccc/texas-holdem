@@ -98,13 +98,18 @@ export function attachGateway(io: IO, manager: RoomManager): void {
       EV.RoomJoin,
       wrap(
         (
-          p: { roomCode: string; nickname: string; playerId?: string },
+          p: { roomCode: string; nickname: string; playerId?: string; password?: string },
           cb: (r: JoinedPayload | ApiError) => void,
         ) => {
           const room = manager.get(p?.roomCode ?? '');
           if (!room) return cb(err('房间不存在，请检查房间号', 'ROOM_NOT_FOUND'));
           const nickname = (p?.nickname ?? '').trim();
           if (!nickname) return cb(err('请填写昵称', 'BAD_NICKNAME'));
+          // 密码校验：本人凭 playerId 重连免密；新成员必须通过密码（若设置了）
+          const isRejoin = !!p.playerId && room.hasPlayer(p.playerId);
+          if (!isRejoin && !room.checkPassword(p.password)) {
+            return cb(err('房间密码错误或未填写', 'WRONG_PASSWORD'));
+          }
           const { player } = room.addPlayer(nickname, socket.id, p.playerId);
           session.playerId = player.id;
           session.roomCode = room.code;
@@ -141,6 +146,25 @@ export function attachGateway(io: IO, manager: RoomManager): void {
       EV.RoomConfigure,
       wrap((p: { options: CreateRoomOptions }, cb: (r: { ok: true } | ApiError) => void) => {
         roomOf().configure(session.playerId, p?.options ?? {});
+        cb({ ok: true });
+      }),
+    );
+
+    socket.on(
+      EV.RoomKick,
+      wrap((p: { playerId: string }, cb: (r: { ok: true } | ApiError) => void) => {
+        const room = roomOf();
+        const kicked = room.kickPlayer(session.playerId, p?.playerId ?? '');
+        if (kicked.socketId) {
+          // 私信被踢者并把它从房间频道移除、清掉其会话，杜绝后续操作
+          io.to(kicked.socketId).emit(EV.RoomKicked, { message: '你已被房主请出房间' });
+          const ks = io.sockets.sockets.get(kicked.socketId);
+          if (ks) {
+            ks.leave(`room:${room.code}`);
+            (ks.data as Session).playerId = '';
+            (ks.data as Session).roomCode = '';
+          }
+        }
         cb({ ok: true });
       }),
     );
@@ -226,6 +250,22 @@ export function attachGateway(io: IO, manager: RoomManager): void {
       }),
     );
 
+    socket.on(
+      EV.EmojiThrow,
+      wrap((p: { toSeatIndex: number; emoji: string }, cb: (r: { ok: true } | ApiError) => void) => {
+        roomOf().throwEmoji(session.playerId, p.toSeatIndex, p.emoji);
+        cb({ ok: true });
+      }),
+    );
+
+    socket.on(
+      EV.DanmakuSend,
+      wrap((p: { text: string; style: string }, cb: (r: { ok: true } | ApiError) => void) => {
+        roomOf().sendDanmaku(session.playerId, p.text, p.style);
+        cb({ ok: true });
+      }),
+    );
+
     // ---------- 断线 ----------
 
     socket.on('disconnect', () => {
@@ -264,6 +304,11 @@ function makeHooks(io: IO, getRoom: () => Room, onRoomActivity?: () => void, des
     },
     destroyRoom: () => {
       destroyRoom?.();
+    },
+    broadcast: (event: string, payload: unknown) => {
+      const room = getRoom();
+      // 事件名为运行时字符串，绕过 socket.io 的字面量类型约束
+      (io.to(`room:${room.code}`) as unknown as { emit: (e: string, p: unknown) => void }).emit(event, payload);
     },
   };
 }

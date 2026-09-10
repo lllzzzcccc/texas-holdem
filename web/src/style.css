@@ -73,7 +73,9 @@ button.ok {
   background: linear-gradient(180deg, #52b788, #2d6a4f);
 }
 
-input[type='text'] {
+input[type='text'],
+input[type='password'],
+select {
   background: rgba(255, 255, 255, 0.08);
   border: 1px solid rgba(255, 255, 255, 0.18);
   border-radius: 10px;
@@ -82,9 +84,16 @@ input[type='text'] {
   font-size: 16px;
   outline: none;
   width: 100%;
+  font-family: inherit;
 }
-input[type='text']:focus {
+input[type='text']:focus,
+input[type='password']:focus,
+select:focus {
   border-color: var(--accent);
+}
+select option {
+  background: #16324f;
+  color: #fff;
 }
 
 .page-center {

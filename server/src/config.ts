@@ -13,4 +13,6 @@ export const config = {
   /** 抽牌动画节奏：每张牌间隔 / 翻完后停留 */
   dealerDrawCardMs: Number(process.env.DEALER_DRAW_CARD_MS ?? 700),
   dealerDrawPauseMs: Number(process.env.DEALER_DRAW_PAUSE_MS ?? 2200),
+  /** 输光玩家补码/离席决策时限（超时自动离席） */
+  rebuyDecisionMs: Number(process.env.REBUY_DECISION_MS ?? 30000),
 } as const;

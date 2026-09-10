@@ -65,7 +65,9 @@ function nameColor(name: string): { background: string; color: string; borderCol
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 12px;
   backdrop-filter: blur(6px);
-  z-index: 40;
+  /* 必须高于结算面板遮罩（z-90）：旧浏览器不支持 container-type 时遮罩
+     会逃逸到根层级，边栏层级不够就会被冻结无法滚动 */
+  z-index: 95;
   transform: translateX(calc(100% + 14px));
   transition: transform 0.28s ease;
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
@@ -120,23 +122,29 @@ function nameColor(name: string): { background: string; color: string; borderCol
   line-height: 1.7;
   color: #cfe0d4;
   word-break: break-all;
+  /* 名字 tab 与正文基线对齐，不再一高一低 */
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
 }
 .name-tab {
   display: inline-block;
+  flex: none;
   font-size: 12px;
   font-weight: 700;
   line-height: 1.3;
   padding: 1px 8px;
-  margin-right: 7px;
   border-radius: 7px;
   border: 1px solid;
-  vertical-align: 1px;
   white-space: nowrap;
   max-width: 120px;
   overflow: hidden;
   text-overflow: ellipsis;
+  /* tab 盒高小于正文行高，基线对齐后视觉上略偏低，微调回来 */
+  transform: translateY(-2px);
 }
 .log-entry.k-divider {
+  display: block; /* 覆盖 flex，保持整行居中 */
   text-align: center;
   color: #d8c690;
   font-weight: 600;

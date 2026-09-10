@@ -140,7 +140,11 @@ const gameOver = computed(() => store.room?.status === 'lobby');
 
         <div class="footer">
           <template v-if="gameOver">
-            <span class="over-text">本局游戏已结束</span>
+            <button v-if="store.isHost" class="end-btn" @click="store.stopGame()">结束本局</button>
+            <span v-else class="wait-text">等待房主结束本局…</span>
+          </template>
+          <template v-else-if="store.pendingRebuy">
+            <span class="wait-text">等待输光玩家抉择…</span>
           </template>
           <template v-else-if="store.isHost">
             <button class="next-btn" @click="store.nextHand()">开始下一手 ▶</button>
@@ -156,19 +160,23 @@ const gameOver = computed(() => store.room?.status === 'lobby');
 
 <style scoped>
 .overlay {
-  position: fixed;
+  /* 只冻结牌桌区域（父级 .table-zone 为 positioned），
+     顶栏按钮、右侧记录栏、弹幕入口等其他区域保持可交互；
+     不做灰色压暗/模糊——结算时牌桌保持清晰可见 */
+  position: absolute;
   inset: 0;
-  background: rgba(0, 0, 0, 0.55);
+  background: transparent;
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 90;
-  backdrop-filter: blur(3px);
   padding: 16px;
+  border-radius: 18px;
 }
 .panel {
-  width: min(440px, 94vw);
-  max-height: 86dvh;
+  width: min(440px, 94%);
+  max-height: 100%;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -296,14 +304,14 @@ const gameOver = computed(() => store.room?.status === 'lobby');
   font-size: 16px;
   padding: 12px 36px;
 }
-.wait-text,
-.over-text {
+.end-btn {
+  background: linear-gradient(180deg, #ef476f, #c1123b);
+  font-size: 16px;
+  padding: 12px 36px;
+}
+.wait-text {
   color: var(--text-dim);
   font-size: 14px;
-}
-.over-text {
-  color: var(--gold);
-  font-weight: 700;
 }
 .fade-enter-active,
 .fade-leave-active {

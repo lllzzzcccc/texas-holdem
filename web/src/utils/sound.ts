@@ -143,4 +143,19 @@ export const sfx = {
     tone(392, 0.25, { type: 'triangle', gain: 0.09 });
     tone(311, 0.35, { type: 'triangle', gain: 0.09, when: 0.2 });
   },
+  /** 表情投出：丢东西的"嗖——"甩出音（上扬再下坠的抛物线） */
+  emojiWhoosh() {
+    noise(0.3, 700, 0.11, 0, 3800);
+    tone(760, 0.14, { type: 'sine', gain: 0.06, glideTo: 1500 });
+    tone(1500, 0.18, { type: 'sine', gain: 0.05, when: 0.13, glideTo: 240 });
+  },
+  /** 表情命中：轻快"啵" */
+  emojiPop() {
+    tone(760, 0.08, { type: 'sine', gain: 0.12 });
+    tone(1180, 0.1, { type: 'sine', gain: 0.1, when: 0.05 });
+  },
+  /** 弹幕滑过：轻微提示音 */
+  danmaku() {
+    tone(660, 0.06, { type: 'sine', gain: 0.05 });
+  },
 };

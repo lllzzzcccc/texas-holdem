@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 export default defineConfig({
   plugins: [vue()],
-  // 生产环境通过 https://域名/texas-holdem/ 访问（Nginx 剥离前缀反代到 Node）
+  // 应用统一挂在 /texas-holdem 前缀下（后端原生支持，本地与生产行为一致）
   base: '/texas-holdem/',
   resolve: {
     alias: {
@@ -14,14 +14,10 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/socket.io': {
-        target: 'http://localhost:3000',
-        ws: true,
-      },
+      // 后端原生监听带前缀的路径，原样转发即可
       '/texas-holdem/socket.io': {
         target: 'http://localhost:3000',
         ws: true,
-        rewrite: (p) => p.replace(/^\/texas-holdem/, ''),
       },
     },
   },

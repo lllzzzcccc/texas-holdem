@@ -35,7 +35,11 @@ afterAll(() => cleanup?.());
 
 async function connectClient(name: string): Promise<Socket> {
   const { io: ioc } = await import('socket.io-client');
-  const socket = ioc(`http://localhost:${port}`, { transports: ['websocket'], forceNew: true });
+  const socket = ioc(`http://localhost:${port}`, {
+    transports: ['websocket'],
+    forceNew: true,
+    path: '/texas-holdem/socket.io',
+  });
   (socket as unknown as { name: string }).name = name;
   await new Promise<void>((res, rej) => {
     socket.on('connect', () => res());
@@ -90,8 +94,23 @@ describe('Socket 集成冒烟测试', () => {
     expect(summary.maxSeats).toBe(9);
     expect(summary.hostNickname).toBe('房主');
 
-    // 创建到满 10 桌
-    for (let i = 1; i < 10; i++) {
+    // 私密房间不出现在大厅列表
+    const priv = await connectClient('priv');
+    const privCreated = await emitAck<{ roomCode: string }>(priv, EV.RoomCreate, {
+      nickname: '隐身',
+      options: { isPrivate: true },
+    });
+    expect(privCreated.roomCode).toBeTruthy();
+    const { rooms: afterPriv } = await emitAck<{ rooms: import('@th/shared').RoomSummary[] }>(
+      watcher,
+      EV.LobbyList,
+      {},
+    );
+    expect(afterPriv.find((r) => r.code === privCreated.roomCode)).toBeUndefined();
+    priv.close();
+
+    // 创建到满 10 桌（已有：host 1 桌 + 私密 1 桌，再补 8 桌）
+    for (let i = 1; i < 9; i++) {
       const c = await connectClient(`filler${i}`);
       const r = await emitAck<{ roomCode: string }>(c, EV.RoomCreate, { nickname: `凑数${i}` });
       expect(r.roomCode).toBeTruthy();
@@ -108,9 +127,101 @@ describe('Socket 集成冒烟测试', () => {
     host.close();
     extra.close();
     // 清理本测试创建的房间，避免影响后续测试
-    for (const r of managerRef.listSummaries()) managerRef.remove(r.code);
+    for (const c of managerRef.listCodes()) managerRef.remove(c);
     expect(managerRef.size).toBe(0);
   }, 30000);
+
+  it('昵称查重：重名玩家拒绝加入，本人重连不受影响', async () => {
+    const a = await connectClient('A');
+    const created = await emitAck<JoinedPayload>(a, EV.RoomCreate, { nickname: '小明' });
+    const b = await connectClient('B');
+    const joined = await emitAck<JoinedPayload>(b, EV.RoomJoin, { roomCode: created.roomCode, nickname: '小红' });
+    expect(joined.roomCode).toBe(created.roomCode);
+
+    // 重名（含大小写/空格变体）被拒绝
+    const c = await connectClient('C');
+    const dup = await emitAck<{ code: string; message: string }>(c, EV.RoomJoin, {
+      roomCode: created.roomCode,
+      nickname: ' 小明 ',
+    });
+    expect(dup.code).toBeTruthy();
+    expect(dup.message).toContain('昵称');
+    c.close();
+
+    // 本人带令牌重连：同样的昵称放行
+    const a2 = await connectClient('A2');
+    const rejoin = await emitAck<JoinedPayload>(a2, EV.RoomJoin, {
+      roomCode: created.roomCode,
+      nickname: '小明',
+      playerId: created.playerId,
+    });
+    expect(rejoin.playerId).toBe(created.playerId);
+
+    a.close();
+    a2.close();
+    b.close();
+    for (const c of managerRef.listCodes()) managerRef.remove(c);
+  }, 30000);
+
+  it('房间密码：无密码/错误密码被拒，正确密码可加入，状态不泄露密码', async () => {
+    const host = await connectClient('pwhost');
+    const created = await emitAck<JoinedPayload>(host, EV.RoomCreate, {
+      nickname: '房主',
+      options: { password: '1234' },
+    });
+    const code = created.roomCode;
+    expect(created.state.hasPassword).toBe(true);
+
+    // 未填密码 / 密码错误均被拒（加入前不入房，不占名额）
+    const a = await connectClient('pwa');
+    const noPwd = await emitAck<{ code: string }>(a, EV.RoomJoin, { roomCode: code, nickname: '无密' });
+    expect(noPwd.code).toBe('WRONG_PASSWORD');
+    const wrongPwd = await emitAck<{ code: string }>(a, EV.RoomJoin, {
+      roomCode: code,
+      nickname: '无密',
+      password: '9999',
+    });
+    expect(wrongPwd.code).toBe('WRONG_PASSWORD');
+
+    // 密码正确加入
+    const okJoin = await emitAck<JoinedPayload>(a, EV.RoomJoin, {
+      roomCode: code,
+      nickname: '无密',
+      password: '1234',
+    });
+    expect(okJoin.roomCode).toBe(code);
+
+    host.close();
+    a.close();
+    for (const c of managerRef.listCodes()) managerRef.remove(c);
+  }, 20000);
+
+  it('房主踢人：被踢者收到 kicked 事件并移出房间，不能踢自己', async () => {
+    const host = await connectClient('kickhost');
+    const created = await emitAck<JoinedPayload>(host, EV.RoomCreate, { nickname: '房主' });
+    const code = created.roomCode;
+
+    const guest = await connectClient('kickguest');
+    const joined = await emitAck<JoinedPayload>(guest, EV.RoomJoin, { roomCode: code, nickname: '访客' });
+    expect(joined.roomCode).toBe(code);
+
+    // 不能踢自己
+    const self = await emitAck<{ code: string; message: string }>(host, EV.RoomKick, {
+      playerId: created.playerId,
+    });
+    expect(self.code).toBeTruthy();
+
+    // 房主踢出访客 → 访客收到 kicked 事件，房间成员只剩房主
+    const kickedP = waitForEvent<{ message: string }>(guest, EV.RoomKicked);
+    const ok = await emitAck<{ ok: true }>(host, EV.RoomKick, { playerId: joined.playerId });
+    expect(ok.ok).toBe(true);
+    await kickedP;
+    expect(managerRef.get(code)!.players.size).toBe(1);
+
+    host.close();
+    guest.close();
+    for (const c of managerRef.listCodes()) managerRef.remove(c);
+  }, 20000);
 
   it('两名玩家建房、入座、抽牌、打完一手牌，底牌不泄露', async () => {
     const a = await connectClient('A');
@@ -200,6 +311,32 @@ describe('Socket 集成冒烟测试', () => {
     a.close();
     b.close();
   }, 30000);
+
+  it('中途离场：抽牌阶段有人退出 → 无法凑齐 2 人时整局结束', async () => {
+    const a = await connectClient('A');
+    const b = await connectClient('B');
+    const created = await emitAck<JoinedPayload>(a, EV.RoomCreate, { nickname: '小明' });
+    const code = created.roomCode;
+    await emitAck<JoinedPayload>(b, EV.RoomJoin, { roomCode: code, nickname: '小红' });
+    await emitAck<{ ok: true }>(a, EV.LobbyTakeSeat, { seatIndex: 0, buyIn: 1000 });
+    await emitAck<{ ok: true }>(b, EV.LobbyTakeSeat, { seatIndex: 1, buyIn: 1000 });
+    await emitAck<{ ok: true }>(a, EV.GameStart, {});
+
+    // 抽牌阶段 B 退出
+    await emitAck<{ ok: true }>(b, EV.RoomLeave, {});
+
+    // A 抽牌 → 揭晓后只剩 A 一人，无法继续 → 整局结束回大厅
+    const lobbyState = waitForEvent<RoomState>(a, EV.RoomState, (s) => s.status === 'lobby');
+    const drawA = await emitAck<{ ok: true }>(a, EV.GameDrawCard, { deckIndex: 5 });
+    expect(drawA.ok).toBe(true);
+    const state = await lobbyState;
+    expect(state.status).toBe('lobby');
+    expect(state.game).toBeNull(); // 不能残留抽牌状态（否则前端卡在抽牌画面）
+
+    a.close();
+    b.close();
+    for (const c of managerRef.listCodes()) managerRef.remove(c);
+  }, 20000);
 
   it('房主权利：修改设置、离开按加入顺序转移房主、解散房间、无房主立即销毁', async () => {
     const a = await connectClient('h1');

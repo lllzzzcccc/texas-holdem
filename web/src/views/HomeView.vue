@@ -4,19 +4,13 @@ import { useRouter } from 'vue-router';
 import { LOBBY_MAX_ROOMS, type RoomSummary } from '@th/shared';
 import { useRoomStore } from '../stores/room';
 import { savedNickname, socket } from '../socket';
-import { BLIND_PRESETS, HAND_OPTIONS, SEAT_OPTIONS, TURN_OPTIONS } from '../utils/roomOptions';
+import CreateRoomDialog from '../components/CreateRoomDialog.vue';
 
 const router = useRouter();
 const store = useRoomStore();
 const nickname = ref(savedNickname());
 const roomCode = ref('');
-const busy = ref(false);
-
-// 房间设置
-const blindPreset = ref('10/20');
-const maxSeats = ref(9);
-const turnTimeoutSec = ref(30);
-const maxHands = ref(0);
+const createOpen = ref(false);
 
 onMounted(() => {
   store.wireSocket();
@@ -30,23 +24,16 @@ onBeforeUnmount(() => {
 
 const lobbyFull = computed(() => store.lobbyRooms.length >= LOBBY_MAX_ROOMS);
 
-async function createRoom() {
-  if (!nickname.value.trim() || busy.value) return;
-  busy.value = true;
-  const [smallBlind, bigBlind] = blindPreset.value.split('/').map(Number);
-  const code = await store.createRoom(nickname.value.trim(), {
-    smallBlind,
-    bigBlind,
-    maxSeats: maxSeats.value,
-    turnTimeoutSec: turnTimeoutSec.value,
-    maxHands: maxHands.value,
-  });
-  busy.value = false;
-  if (code) router.push(`/room/${code}`);
+function openCreate() {
+  if (!nickname.value.trim()) {
+    store.toast('请先填写昵称');
+    return;
+  }
+  createOpen.value = true;
 }
 
 function joinRoom() {
-  if (!nickname.value.trim() || roomCode.value.trim().length !== 6 || busy.value) return;
+  if (!nickname.value.trim() || roomCode.value.trim().length !== 6) return;
   router.push(`/room/${roomCode.value.trim().toUpperCase()}`);
 }
 
@@ -80,37 +67,10 @@ function seatDots(room: RoomSummary): boolean[] {
       <div class="card-panel form">
         <label class="field">
           <span>你的昵称</span>
-          <input v-model="nickname" type="text" maxlength="12" placeholder="输入昵称" @keyup.enter="createRoom" />
+          <input v-model="nickname" type="text" maxlength="12" placeholder="输入昵称" @keyup.enter="openCreate" />
         </label>
 
-        <div class="options-grid">
-          <label class="field">
-            <span>盲注</span>
-            <select v-model="blindPreset">
-              <option v-for="b in BLIND_PRESETS" :key="b" :value="b">{{ b }}</option>
-            </select>
-          </label>
-          <label class="field">
-            <span>最大座位</span>
-            <select v-model.number="maxSeats">
-              <option v-for="n in SEAT_OPTIONS" :key="n" :value="n">{{ n }} 人</option>
-            </select>
-          </label>
-          <label class="field">
-            <span>思考时间</span>
-            <select v-model.number="turnTimeoutSec">
-              <option v-for="t in TURN_OPTIONS" :key="t" :value="t">{{ t }} 秒</option>
-            </select>
-          </label>
-          <label class="field">
-            <span>回合数</span>
-            <select v-model.number="maxHands">
-              <option v-for="h in HAND_OPTIONS" :key="h.value" :value="h.value">{{ h.label }}</option>
-            </select>
-          </label>
-        </div>
-
-        <button class="big" :disabled="!nickname.trim() || busy || lobbyFull" @click="createRoom">
+        <button class="big" :disabled="!nickname.trim() || lobbyFull" @click="openCreate">
           {{ lobbyFull ? '大厅已满' : '创建房间' }}
         </button>
 
@@ -135,7 +95,6 @@ function seatDots(room: RoomSummary): boolean[] {
       <section class="hall card-panel">
         <div class="hall-header">
           <h2>游戏大厅</h2>
-          <span class="hall-count">{{ store.lobbyRooms.length }} / {{ LOBBY_MAX_ROOMS }} 桌</span>
         </div>
 
         <div v-if="store.lobbyRooms.length === 0" class="hall-empty">
@@ -185,6 +144,13 @@ function seatDots(room: RoomSummary): boolean[] {
         </div>
       </section>
     </div>
+
+    <CreateRoomDialog
+      :open="createOpen"
+      :nickname="nickname"
+      @close="createOpen = false"
+      @created="(code) => router.push(`/room/${code}`)"
+    />
 
     <transition name="fade">
       <div v-if="store.errorMsg" class="toast">{{ store.errorMsg }}</div>
@@ -256,32 +222,6 @@ function seatDots(room: RoomSummary): boolean[] {
   font-size: 14px;
   color: var(--text-dim);
 }
-.options-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-}
-.options-grid .field span {
-  font-size: 12px;
-}
-select {
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  border-radius: 10px;
-  padding: 10px 12px;
-  color: var(--text);
-  font-size: 14px;
-  font-family: inherit;
-  outline: none;
-  cursor: pointer;
-}
-select:focus {
-  border-color: var(--accent);
-}
-select option {
-  background: #16324f;
-  color: #fff;
-}
 .big {
   padding: 14px;
   font-size: 17px;
@@ -324,10 +264,6 @@ select option {
 .hall-header h2 {
   font-size: 20px;
   letter-spacing: 3px;
-}
-.hall-count {
-  font-size: 13px;
-  color: var(--text-dim);
 }
 .hall-empty {
   display: flex;
@@ -394,7 +330,8 @@ select option {
 }
 .mini-table {
   position: relative;
-  height: 54px;
+  width: 100%;
+  aspect-ratio: 1000 / 560; /* 与真实牌桌比例一致，不再被压扁 */
   border-radius: 50%;
   background: radial-gradient(ellipse at center, #35805a 0%, #1e5236 100%);
   border: 3px solid #5d4037;
@@ -405,17 +342,19 @@ select option {
   height: 8px;
   border-radius: 50%;
   background: rgba(255, 255, 255, 0.25);
+  transform: translate(-50%, -50%);
 }
-/* 9 个座位点沿椭圆排布（用 nth-child 写死角度） */
-.seat-dot:nth-child(1) { left: 48%; top: 84%; }
-.seat-dot:nth-child(2) { left: 18%; top: 72%; }
-.seat-dot:nth-child(3) { left: 2%;  top: 46%; }
-.seat-dot:nth-child(4) { left: 8%;  top: 16%; }
-.seat-dot:nth-child(5) { left: 30%; top: 2%; }
-.seat-dot:nth-child(6) { left: 62%; top: 2%; }
-.seat-dot:nth-child(7) { left: 84%; top: 16%; }
-.seat-dot:nth-child(8) { left: 90%; top: 46%; }
-.seat-dot:nth-child(9) { left: 74%; top: 72%; }
+/* 9 个座位点沿椭圆边缘排布：圆心 (50%,50%)，半径 46%（收在木纹边内侧），
+   从底部正中起每 40° 一个，与迷你桌 1000/560 的椭圆比例精确贴合 */
+.seat-dot:nth-child(1) { left: 50%;   top: 96%; }
+.seat-dot:nth-child(2) { left: 20.4%; top: 85.2%; }
+.seat-dot:nth-child(3) { left: 4.7%;  top: 58%; }
+.seat-dot:nth-child(4) { left: 10.2%; top: 27%; }
+.seat-dot:nth-child(5) { left: 34.3%; top: 6.8%; }
+.seat-dot:nth-child(6) { left: 65.7%; top: 6.8%; }
+.seat-dot:nth-child(7) { left: 89.8%; top: 27%; }
+.seat-dot:nth-child(8) { left: 95.3%; top: 58%; }
+.seat-dot:nth-child(9) { left: 79.6%; top: 85.2%; }
 .seat-dot.filled {
   background: #ffd966;
   box-shadow: 0 0 4px rgba(255, 217, 102, 0.8);

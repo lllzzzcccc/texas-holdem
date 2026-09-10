@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type { CardStr, SeatState } from '@th/shared';
+import { EMOJI_PRESETS } from '@th/shared';
 import { useRoomStore } from '../../stores/room';
 import { registerSeatEl } from '../../anim/anchors';
 import { inwardVector } from '../../composables/useTableLayout';
@@ -81,6 +82,22 @@ function bubbleClass(action: string): string {
   if (action.includes('加注')) return 'raise';
   return '';
 }
+
+// ---------- 表情投掷 ----------
+
+const emojis = EMOJI_PRESETS;
+const pickerOpen = computed(() => !!props.seat && store.emojiTargetSeat === props.seat.seatIndex);
+
+/** 点击头像：打开/关闭表情选择盘（仅入座玩家可发起投掷，服务端也会校验） */
+function onAvatarClick() {
+  if (!props.seat) return;
+  store.toggleEmojiPicker(props.seat.seatIndex);
+}
+
+function pickEmoji(emoji: string) {
+  if (!props.seat) return;
+  store.throwEmoji(props.seat.seatIndex, emoji);
+}
 </script>
 
 <template>
@@ -109,10 +126,21 @@ function bubbleClass(action: string): string {
 
       <!-- 头像与信息 -->
       <div class="seat-body" :class="{ acting, folded: seat.hasFolded, me: isMe, offline: !seat.connected }">
-        <div class="avatar" :class="{ winner: isWinner }">
+        <div class="avatar" :class="{ winner: isWinner, clickable: true }" title="点击投掷表情" @click.stop="onAvatarClick">
           <span>{{ initials }}</span>
           <span v-if="!seat.connected" class="offline-dot" title="离线">⚡</span>
         </div>
+
+        <!-- 表情选择盘：环绕头像上方展开 -->
+        <transition name="pop">
+          <div v-if="pickerOpen" class="emoji-picker-wrap">
+            <div class="emoji-backdrop" @click.stop="onAvatarClick" />
+            <div class="emoji-picker" @click.stop>
+              <button v-for="e in emojis" :key="e" class="emoji-option" @click="pickEmoji(e)">{{ e }}</button>
+            </div>
+          </div>
+        </transition>
+
         <div class="plate">
           <div class="nick">{{ seat.nickname }}</div>
           <div class="stack">
@@ -121,6 +149,7 @@ function bubbleClass(action: string): string {
           </div>
         </div>
         <div v-if="seat.isDealer" class="dealer-btn">D</div>
+        <div v-if="isMe" class="me-tag">我</div>
         <div v-if="seat.isAllIn" class="allin-tag">ALL-IN</div>
       </div>
 
@@ -187,6 +216,30 @@ function bubbleClass(action: string): string {
   opacity: 0.55;
 }
 
+/* ---------- 自己的座位：青色高亮，与他人明显区分 ---------- */
+.seat-body.me .avatar {
+  border-color: var(--accent);
+  background: linear-gradient(160deg, #2a7a8c, #14424e);
+  box-shadow: 0 0 14px 3px rgba(76, 201, 240, 0.45);
+}
+.seat-body.me .plate {
+  border: 1px solid rgba(76, 201, 240, 0.6);
+  box-shadow: 0 0 10px rgba(76, 201, 240, 0.25);
+}
+.me-tag {
+  position: absolute;
+  left: -6px;
+  top: -10px;
+  background: linear-gradient(180deg, #4cc9f0, #1d8fb8);
+  color: #06222c;
+  font-size: 11px;
+  font-weight: 800;
+  border-radius: 8px;
+  padding: 1px 7px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+  z-index: 5;
+}
+
 .avatar {
   width: 56px;
   height: 56px;
@@ -201,8 +254,21 @@ function bubbleClass(action: string): string {
   color: #fff;
   position: relative;
   transition:
+    transform 0.18s ease,
     border-color 0.25s,
     box-shadow 0.25s;
+}
+.avatar.clickable {
+  cursor: pointer;
+}
+/* hover 反馈：头像微微放大浮起 */
+.avatar.clickable:hover {
+  transform: scale(1.14);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+  z-index: 6;
+}
+.seat-body.me .avatar.clickable:hover {
+  box-shadow: 0 0 18px 5px rgba(76, 201, 240, 0.6);
 }
 .seat-body.acting .avatar {
   border-color: var(--gold);
@@ -212,6 +278,60 @@ function bubbleClass(action: string): string {
 .avatar.winner {
   border-color: #ffd700;
   box-shadow: 0 0 24px 6px rgba(255, 215, 0, 0.75);
+}
+
+/* ---------- 表情选择盘（头像左侧展开，避开上方底牌区与右侧气泡区） ---------- */
+.emoji-picker-wrap {
+  position: absolute;
+  right: calc(50% + 44px);
+  top: -14px;
+  z-index: 80;
+}
+.emoji-backdrop {
+  position: fixed;
+  inset: 0;
+  background: transparent;
+  z-index: -1;
+}
+.emoji-picker {
+  position: absolute;
+  right: 0;
+  top: 0;
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 4px;
+  padding: 8px;
+  background: rgba(10, 20, 16, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 14px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(6px);
+  white-space: nowrap;
+}
+.emoji-option {
+  background: none;
+  border: none;
+  box-shadow: none;
+  padding: 4px;
+  font-size: 22px;
+  line-height: 1;
+  border-radius: 8px;
+  cursor: pointer;
+  transition:
+    transform 0.12s ease,
+    background 0.12s ease;
+}
+.emoji-option:hover {
+  background: rgba(255, 255, 255, 0.14);
+  transform: scale(1.25);
+}
+.pop-enter-active,
+.pop-leave-active {
+  transition: opacity 0.16s ease;
+}
+.pop-enter-from,
+.pop-leave-to {
+  opacity: 0;
 }
 @keyframes pulse {
   50% {
@@ -255,8 +375,8 @@ function bubbleClass(action: string): string {
 
 .dealer-btn {
   position: absolute;
-  right: 6px;
-  top: -8px;
+  right: -6px;
+  top: -10px;
   width: 24px;
   height: 24px;
   border-radius: 50%;
@@ -322,9 +442,9 @@ function bubbleClass(action: string): string {
 
 .action-bubble {
   position: absolute;
-  left: 50%;
-  bottom: calc(100% - 6px);
-  transform: translateX(-50%);
+  /* 头像右侧区域：底牌在正上方、表情盘在左侧，各元素分区不堆叠 */
+  left: calc(50% + 42px);
+  top: 4px;
   background: rgba(255, 255, 255, 0.94);
   color: #16213a;
   font-size: 12px;
@@ -348,7 +468,7 @@ function bubbleClass(action: string): string {
 }
 .bubble-enter-from {
   opacity: 0;
-  transform: translateX(-50%) translateY(8px) scale(0.7);
+  transform: translateY(8px) scale(0.7);
 }
 
 .bet-chips {

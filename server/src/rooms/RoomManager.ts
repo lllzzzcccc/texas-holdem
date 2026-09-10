@@ -20,8 +20,14 @@ export class RoomManager {
     return this.rooms.size;
   }
 
+  /** 大厅列表：私密房间对外的入口只有房间号/邀请链接，不出现在列表里 */
   listSummaries(): RoomSummary[] {
-    return [...this.rooms.values()].map((r) => r.summary());
+    return [...this.rooms.values()].filter((r) => !r.isPrivate).map((r) => r.summary());
+  }
+
+  /** 全部房间号（含私密房，供管理操作与测试清理用） */
+  listCodes(): string[] {
+    return [...this.rooms.keys()];
   }
 
   generateCode(): string {

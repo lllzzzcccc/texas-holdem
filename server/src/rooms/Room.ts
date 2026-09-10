@@ -2,12 +2,15 @@ import { randomInt, randomUUID } from 'node:crypto';
 import type {
   CardStr,
   CreateRoomOptions,
+  DanmakuPayload,
+  EmojiThrowPayload,
   GameEvent,
   GameState,
   LegalActions,
   RoomState,
   SeatState,
 } from '@th/shared';
+import { DANMAKU_MAX_LEN, DANMAKU_STYLES, EMOJI_PRESETS, EV } from '@th/shared';
 import { Deck, compareHighCard } from '../engine/deck.js';
 import { HandEngine, type EngineEvent } from '../engine/HandEngine.js';
 import { nextSeat } from '../engine/positions.js';
@@ -28,6 +31,13 @@ interface Seat {
   stack: number;
 }
 
+/** 规范化房间密码：undefined/null/'' → 无密码；其余必须是 4 位数字 */
+function normalizeRoomPassword(pw: string | undefined | null): string | null {
+  if (pw === undefined || pw === null || pw === '') return null;
+  if (!/^\d{4}$/.test(pw)) throw new Error('房间密码需为 4 位数字');
+  return pw;
+}
+
 /** Room 对外输出（由 gateway 实现，桥接 socket.io） */
 export interface RoomHooks {
   /** 广播带 seq 的游戏事件 */
@@ -36,6 +46,8 @@ export interface RoomHooks {
   emitState(): void;
   /** 私信某玩家：底牌 / 轮到其行动 */
   emitToPlayer(playerId: string, payload: { holeCards?: CardStr[]; yourTurn?: LegalActions }): void;
+  /** 向全房间广播一条无 seq 的即时消息（表情投掷、弹幕等） */
+  broadcast(event: string, payload: unknown): void;
   /** 房间无人可担任房主时调用：立即从大厅销毁本房间 */
   destroyRoom(): void;
 }
@@ -56,6 +68,10 @@ export class Room {
   turnTimeoutMs: number;
   /** 回合数上限（0 = 不限） */
   maxHands: number;
+  /** 私密房间：不出现在大厅列表，只能凭房间号/邀请链接加入 */
+  isPrivate: boolean;
+  /** 加入密码（4 位数字，null = 无密码）。永不出现在 RoomState 中 */
+  password: string | null;
 
   emptySince: number | null = null;
 
@@ -83,6 +99,12 @@ export class Room {
   private handFinalized = false;
   private disconnectTimers = new Map<string, NodeJS.Timeout>();
   private forfeited = new Set<string>();
+  /** 输光玩家补码决策：待决座位 + 截止时间戳 */
+  private rebuyPending: number[] = [];
+  private rebuyDeadline: number | null = null;
+  private rebuyTimer: NodeJS.Timeout | null = null;
+  /** finalizeHand 结算中标记：抑制 reconcile 的自动判定，避免与统一结算逻辑冲突 */
+  private reconcilingHand = false;
 
   constructor(code: string, hostId: string, hooks: RoomHooks, options: CreateRoomOptions = {}) {
     this.code = code;
@@ -100,6 +122,8 @@ export class Room {
     this.turnTimeoutMs = Math.min(120, Math.max(10, Number.isFinite(turnSec) ? turnSec : 30)) * 1000;
     const hands = Math.floor(options.maxHands ?? 0);
     this.maxHands = Math.min(200, Math.max(0, Number.isFinite(hands) ? hands : 0));
+    this.isPrivate = options.isPrivate === true;
+    this.password = normalizeRoomPassword(options.password);
     // 买入范围跟随盲注：20BB ~ 200BB
     this.minBuyIn = this.bigBlind * 20;
     this.maxBuyIn = this.bigBlind * 200;
@@ -111,6 +135,7 @@ export class Room {
     this.clearTurnTimer();
     this.clearDrawTimer();
     if (this.nextHandTimer) clearTimeout(this.nextHandTimer);
+    if (this.rebuyTimer) clearTimeout(this.rebuyTimer);
     for (const t of this.disconnectTimers.values()) clearTimeout(t);
   }
 
@@ -136,6 +161,16 @@ export class Room {
   }
 
   // ---------- 玩家进出 ----------
+
+  /** 该 playerId 是否已是房间成员（重连免密判断用） */
+  hasPlayer(playerId: string): boolean {
+    return this.players.has(playerId);
+  }
+
+  /** 校验加入密码（无密码时恒通过） */
+  checkPassword(pw: string | undefined): boolean {
+    return this.password === null || this.password === pw;
+  }
 
   /** 加入房间（或凭 playerId 重连）。返回玩家与是否为新玩家。 */
   addPlayer(nickname: string, socketId: string, playerId?: string): { player: Player; isNew: boolean } {
@@ -172,6 +207,12 @@ export class Room {
         bySocket.nickname = nickname || bySocket.nickname;
         return { player: bySocket, isNew: false };
       }
+    }
+    // 昵称查重：新玩家不能与房间内现有成员重名（忽略大小写与首尾空格；
+    // 本人重连/同 socket 复用走上面的分支，不受此限）
+    const norm = (s: string) => s.trim().toLowerCase();
+    if ([...this.players.values()].some((p) => norm(p.nickname) === norm(nickname))) {
+      throw new Error('该昵称已被房间内其他玩家使用，请换一个昵称');
     }
     const player: Player = {
       id: playerId && !this.players.has(playerId) ? playerId : randomUUID(),
@@ -237,6 +278,8 @@ export class Room {
     this.clearDisconnectTimer(playerId);
     this.forfeited.delete(playerId);
     if (playerId === this.hostId) this.transferHost();
+    // 补码决策中有人被移除：立即结清其待决座位
+    if (seat !== null) this.resolveRebuySeat(seat);
     // 抽牌阶段有人离开：剩余玩家若都已抽完则直接揭晓
     if (this.dealerDraw && !this.dealerDraw.revealed) this.maybeFinishDraw();
     // 没有任何玩家 = 没有房主，立即销毁，不等空房倒计时
@@ -245,6 +288,24 @@ export class Room {
       return;
     }
     if (![...this.players.values()].some((x) => x.connected)) this.emptySince = Date.now();
+    // 检查当前游戏是否还能继续，避免任何阶段卡死
+    this.reconcilePlayability();
+  }
+
+  /** 房主踢人：立即移出房间。手牌进行中的在座玩家不可踢（避免引擎状态错乱） */
+  kickPlayer(byPlayerId: string, targetId: string): Player {
+    if (byPlayerId !== this.hostId) throw new Error('只有房主可以踢人');
+    if (targetId === this.hostId) throw new Error('不能踢出自己');
+    const target = this.players.get(targetId);
+    if (!target) throw new Error('该玩家不在房间中');
+    const seat = this.seatOfPlayer(targetId);
+    const handRunning = this.engine !== null && !this.engine.isHandEnded;
+    if (handRunning && seat !== null && this.isParticipant(seat)) {
+      throw new Error('该玩家手牌进行中，请等本手结束后再踢');
+    }
+    this.removePlayer(targetId);
+    this.hooks.emitState();
+    return target;
   }
 
   /** 房主离开/被移除时：按加入顺序转移给下一位在线玩家 */
@@ -277,6 +338,9 @@ export class Room {
 
     const hands = Math.floor(options.maxHands ?? this.maxHands);
     if (!Number.isFinite(hands) || hands < 0 || hands > 200) throw new Error('回合数需在 0~200 之间');
+
+    if (options.isPrivate !== undefined) this.isPrivate = options.isPrivate === true;
+    if (options.password !== undefined) this.password = normalizeRoomPassword(options.password);
 
     this.smallBlind = sb;
     this.bigBlind = bb;
@@ -311,6 +375,8 @@ export class Room {
     const handRunning = this.engine !== null && !this.engine.isHandEnded;
     if (handRunning && this.isParticipant(seat)) throw new Error('手牌进行中不能离座');
     this.seats[seat] = null;
+    this.resolveRebuySeat(seat);
+    this.reconcilePlayability();
     this.hooks.emitState();
   }
 
@@ -424,20 +490,57 @@ export class Room {
     this.hooks.emitState();
   }
 
+  /** 表情投掷冷却（playerId → 上次投掷时间戳） */
+  private lastEmojiAt = new Map<string, number>();
+  /** 弹幕冷却（playerId → 上次发送时间戳） */
+  private lastDanmakuAt = new Map<string, number>();
+
+  /** 向某座位投掷表情：发送者须在座，目标座位须有人，1s 冷却 */
+  throwEmoji(playerId: string, toSeatIndex: number, emoji: string): void {
+    const fromSeat = this.seatOfPlayer(playerId);
+    if (fromSeat === null) throw new Error('入座后才能投掷表情');
+    const target = this.seats[toSeatIndex];
+    if (!target) throw new Error('目标座位没有玩家');
+    if (!(EMOJI_PRESETS as readonly string[]).includes(emoji)) throw new Error('不支持的表情');
+    const now = Date.now();
+    if (now - (this.lastEmojiAt.get(playerId) ?? 0) < 1000) throw new Error('投掷太频繁了');
+    this.lastEmojiAt.set(playerId, now);
+    const payload: EmojiThrowPayload = {
+      fromSeatIndex: fromSeat,
+      toSeatIndex,
+      emoji: emoji as EmojiThrowPayload['emoji'],
+      fromNickname: this.players.get(playerId)!.nickname,
+      toNickname: this.players.get(target.playerId)?.nickname ?? '',
+    };
+    this.hooks.broadcast(EV.EmojiThrow, payload);
+  }
+
+  /** 发送弹幕：房间内成员（含观战）均可，3s 冷却 */
+  sendDanmaku(playerId: string, text: string, style: string): void {
+    const player = this.players.get(playerId);
+    if (!player) throw new Error('你不在房间中');
+    const trimmed = (text ?? '').trim();
+    if (!trimmed) throw new Error('弹幕不能为空');
+    if (trimmed.length > DANMAKU_MAX_LEN) throw new Error(`弹幕最长 ${DANMAKU_MAX_LEN} 个字符`);
+    if (!(DANMAKU_STYLES as readonly string[]).includes(style)) throw new Error('不支持的弹幕样式');
+    const now = Date.now();
+    if (now - (this.lastDanmakuAt.get(playerId) ?? 0) < 3000) throw new Error('发送太频繁了');
+    this.lastDanmakuAt.set(playerId, now);
+    const seat = this.seatOfPlayer(playerId);
+    const payload: DanmakuPayload = {
+      seatIndex: seat,
+      nickname: player.nickname,
+      text: trimmed,
+      style: style as DanmakuPayload['style'],
+    };
+    this.hooks.broadcast(EV.DanmakuSend, payload);
+  }
+
   stopGame(playerId: string): void {
     if (playerId !== this.hostId) throw new Error('只有房主可以结束游戏');
-    if (this.status !== 'playing') throw new Error('游戏未开始');
+    // 手牌进行中不可结束；整局已结束（status 已回大厅、仅剩结算面板）时同样可结束清场
     if (this.engine && !this.engine.isHandEnded) throw new Error('手牌进行中，请等本手结束');
-    if (this.nextHandTimer) {
-      clearTimeout(this.nextHandTimer);
-      this.nextHandTimer = null;
-    }
-    this.clearDrawTimer();
-    this.status = 'lobby';
-    this.engine = null;
-    this.dealerDraw = null;
-    this.dealerSeat = -1;
-    this.hooks.emitState();
+    this.resetToLobby();
   }
 
   action(playerId: string, action: 'fold' | 'check' | 'call' | 'raise', amount?: number): void {
@@ -456,6 +559,7 @@ export class Room {
     const seatObj = this.seats[seat]!;
     if (seatObj.stack + amount > this.maxBuyIn) throw new Error(`筹码上限 ${this.maxBuyIn}`);
     seatObj.stack += amount;
+    this.resolveRebuySeat(seat);
     this.hooks.emitState();
   }
 
@@ -464,6 +568,7 @@ export class Room {
     if (playerId !== this.hostId) throw new Error('只有房主可以开始下一手');
     if (this.status !== 'playing') throw new Error('游戏未在进行中');
     if (!this.engine || !this.engine.isHandEnded) throw new Error('当前没有已结束的手牌');
+    if (this.rebuyPending.length > 0) throw new Error('请等待输光玩家作出选择后再开始');
     const ready = this.continuablePlayers();
     if (ready.length < 2) throw new Error('不足 2 名玩家有筹码，无法开始下一手');
     this.startHand();
@@ -478,6 +583,7 @@ export class Room {
       (s): s is Seat => s !== null && s.stack > 0 && this.players.get(s.playerId)?.connected === true,
     );
     if (participants.length < 2) {
+      this.reconcilePlayability(); // 确实无法凑齐 2 人时整局结束，避免卡在「等人」
       this.hooks.emitState(); // 等人补码/重连；房主可结束游戏
       return;
     }
@@ -538,15 +644,90 @@ export class Room {
         this.emit({ type: 'player_eliminated', seatIndex });
       }
     }
-    // 断线超时/中途离开者：手牌结束后移出房间
+    // 断线超时/中途离开者：手牌结束后移出房间（结算期间抑制 reconcile 自动判定）
+    this.reconcilingHand = true;
     for (const pid of [...this.forfeited]) this.removePlayer(pid);
+    this.reconcilingHand = false;
 
-    // 自动结算：可继续的玩家不足 2 人，或已达到房间回合数上限 → 本局游戏结束回大厅
-    if (this.continuablePlayers().length < 2) {
+    // 输光的在座玩家（stack 归零且仍在线），下一手前需决定「买入继续 / 离开」
+    const busted = this.seats
+      .map((s, i) => ({ s, i }))
+      .filter(({ s }) => s !== null && s.stack === 0 && this.players.get(s.playerId)?.connected === true)
+      .map(({ i }) => i);
+
+    if (this.maxHands > 0 && this.handNumber >= this.maxHands) {
+      // 回合数上限 → 整局结束（不等补码决策）
       this.status = 'lobby';
-    } else if (this.maxHands > 0 && this.handNumber >= this.maxHands) {
+    } else if (busted.length > 0) {
+      // 有输光玩家 → 进入补码决策阶段，全员等待，决策后再判定是否整局结束
+      this.startRebuyDecision(busted);
+    } else if (this.continuablePlayers().length < 2) {
+      // 无输光但可继续玩家不足 2 人（如中途断线被移出）→ 整局结束
       this.status = 'lobby';
     }
+    this.hooks.emitState();
+  }
+
+  // ---------- 输光补码决策 ----------
+
+  /** 进入补码决策：记录待决座位，30s 未操作自动离席 */
+  private startRebuyDecision(seats: number[]): void {
+    this.rebuyPending = [...seats];
+    this.rebuyDeadline = Date.now() + config.rebuyDecisionMs;
+    if (this.rebuyTimer) clearTimeout(this.rebuyTimer);
+    this.rebuyTimer = setTimeout(() => this.onRebuyTimeout(), config.rebuyDecisionMs);
+  }
+
+  /** 某个待决座位已解决（补码或离席）：全部解决后统一判定是否整局结束 */
+  private resolveRebuySeat(seatIndex: number): void {
+    if (!this.rebuyPending.includes(seatIndex)) return;
+    this.rebuyPending = this.rebuyPending.filter((s) => s !== seatIndex);
+    if (this.rebuyPending.length === 0) this.finishRebuyDecision();
+  }
+
+  /** 补码决策结束：仍不足 2 名可继续玩家 → 整局结束（前端弹出「结束本局」） */
+  private finishRebuyDecision(): void {
+    if (this.rebuyTimer) {
+      clearTimeout(this.rebuyTimer);
+      this.rebuyTimer = null;
+    }
+    this.rebuyDeadline = null;
+    this.rebuyPending = [];
+    if (this.continuablePlayers().length < 2) {
+      this.status = 'lobby';
+    }
+    this.hooks.emitState();
+  }
+
+  /** 决策超时：仍未操作的输光玩家自动离席 */
+  private onRebuyTimeout(): void {
+    this.rebuyTimer = null;
+    for (const seat of [...this.rebuyPending]) {
+      const s = this.seats[seat];
+      if (s && s.stack === 0) this.seats[seat] = null;
+    }
+    this.finishRebuyDecision();
+  }
+
+  /** 回到未开始游戏状态：清掉牌局引擎/抽牌与各类计时器，保留在座玩家与持分 */
+  private resetToLobby(): void {
+    this.clearTurnTimer();
+    this.clearDrawTimer();
+    if (this.nextHandTimer) {
+      clearTimeout(this.nextHandTimer);
+      this.nextHandTimer = null;
+    }
+    if (this.rebuyTimer) {
+      clearTimeout(this.rebuyTimer);
+      this.rebuyTimer = null;
+    }
+    this.rebuyPending = [];
+    this.rebuyDeadline = null;
+    this.status = 'lobby';
+    this.engine = null;
+    this.dealerDraw = null;
+    this.dealerSeat = -1;
+    this.handFinalized = false;
     this.hooks.emitState();
   }
 
@@ -555,6 +736,34 @@ export class Room {
     return this.seats.filter(
       (s): s is Seat => s !== null && s.stack > 0 && this.players.get(s.playerId)?.connected === true,
     );
+  }
+
+  /** 仍有筹码的座位（含断线但未移出者——他们可能重连回来） */
+  private seatedWithChips(): Seat[] {
+    return this.seats.filter((s): s is Seat => s !== null && s.stack > 0);
+  }
+
+  /**
+   * 有玩家离开/离席/断线移除后，检查当前对局是否还能继续；无法继续则整局结束。
+   * 抽牌中 → 重新判断能否完成；补码决策中 → 交给决策结果；手牌中 → 引擎自行推进；
+   * 无手牌且不足 2 名有筹码玩家 → 整局结束，避免任何阶段卡死。
+   */
+  private reconcilePlayability(): void {
+    if (this.reconcilingHand) return; // finalizeHand 结算中，由其统一判定
+    if (this.dealerDraw && !this.dealerDraw.revealed) {
+      this.maybeFinishDraw();
+      return;
+    }
+    if (this.rebuyPending.length > 0) return;
+    if (this.engine !== null && !this.engine.isHandEnded) return;
+    if (this.status !== 'playing') return;
+    if (this.seatedWithChips().length < 2) {
+      this.status = 'lobby';
+      // 抽牌已结束却凑不齐 2 人：清掉抽牌状态，前端回到干净大厅，避免卡在抽牌画面
+      this.clearDrawTimer();
+      this.dealerDraw = null;
+      this.dealerSeat = -1;
+    }
   }
 
   // ---------- 回合计时 ----------
@@ -730,6 +939,12 @@ export class Room {
       bigBlind: this.bigBlind,
       turnTimeoutMs: this.turnTimeoutMs,
       maxHands: this.maxHands,
+      isPrivate: this.isPrivate,
+      hasPassword: this.password !== null,
+      rebuyDecision:
+        this.rebuyPending.length > 0
+          ? { seatIndexes: [...this.rebuyPending], deadline: this.rebuyDeadline ?? 0 }
+          : null,
       game,
     };
   }

@@ -7,6 +7,7 @@ import { formatChips } from '../../utils/chips';
 import PlayerSeat from './PlayerSeat.vue';
 import PlayingCard from './PlayingCard.vue';
 import ChipStack from './ChipStack.vue';
+import EmojiFlights from './EmojiFlights.vue';
 
 const emit = defineEmits<{ sit: [pos: number] }>();
 
@@ -206,6 +207,9 @@ const drawTip = computed(() => {
 
     <!-- 动画层 -->
     <div ref="layer" class="anim-layer" />
+
+    <!-- 表情飞行动画层（与动画层同坐标系） -->
+    <EmojiFlights />
   </div>
 </template>
 

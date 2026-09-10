@@ -1,5 +1,14 @@
 import { defineStore } from 'pinia';
-import type { CardStr, CreateRoomOptions, GameEvent, LegalActions, RoomState, RoomSummary } from '@th/shared';
+import type {
+  CardStr,
+  CreateRoomOptions,
+  DanmakuPayload,
+  EmojiThrowPayload,
+  GameEvent,
+  LegalActions,
+  RoomState,
+  RoomSummary,
+} from '@th/shared';
 import { EV } from '@th/shared';
 import { emitAck, saveNickname, savePlayerId, socket } from '../socket';
 import { enqueueGameEvent, queueIdle, resetAnimation } from '../anim/queue';
@@ -30,6 +39,8 @@ function isErr(r: unknown): r is ApiErr {
 
 let bannerId = 0;
 let logId = 0;
+let flightId = 0;
+let danmakuId = 0;
 let socketWired = false;
 
 export const useRoomStore = defineStore('room', {
@@ -46,6 +57,12 @@ export const useRoomStore = defineStore('room', {
     lobbyRooms: [] as RoomSummary[],
     /** 本手对局记录（右侧边栏展示） */
     actionLog: [] as LogEntry[],
+    /** 进行中的表情飞行动画（EmojiFlights 层渲染，飞完移除） */
+    emojiFlights: [] as Array<{ id: number } & EmojiThrowPayload>,
+    /** 正在飘屏的弹幕（DanmakuLayer 渲染，动画结束移除） */
+    danmakus: [] as Array<{ id: number } & DanmakuPayload>,
+    /** 表情选择盘当前挂在哪个座位（null = 关闭） */
+    emojiTargetSeat: null as number | null,
 
     // ---- 动画闸门（由动画队列推进；room:state 全量刷新不直接改变这些）----
     /** 已翻开的公共牌数量 */
@@ -81,6 +98,17 @@ export const useRoomStore = defineStore('room', {
     },
     seatedCount(state): number {
       return state.room?.seats.filter(Boolean).length ?? 0;
+    },
+    /** 是否有输光玩家正在补码决策（全员等待其抉择） */
+    pendingRebuy(state): boolean {
+      return !!state.room?.rebuyDecision;
+    },
+    /** 我是否是需要抉择的输光玩家 */
+    bustedPending(state): boolean {
+      const d = state.room?.rebuyDecision;
+      if (!d) return false;
+      const seat = state.room?.seats.find((x) => x?.playerId === state.playerId)?.seatIndex ?? null;
+      return seat !== null && d.seatIndexes.includes(seat);
     },
     canStart(): boolean {
       return this.isHost && this.room?.status === 'lobby' && this.seatedCount >= 2;
@@ -119,6 +147,12 @@ export const useRoomStore = defineStore('room', {
       });
       socket.on(EV.RoomState, (state: RoomState) => {
         this.room = state;
+        // 操作台防残留：状态显示已不轮到我行动（结束本局/手牌结束/房间回大厅等）时，
+        // 立即清除 yourTurn，避免底部操作台不合时宜地出现、点了报错
+        const mySeatIdx = state.seats.find((s) => s?.playerId === this.playerId)?.seatIndex ?? null;
+        const stillMyTurn =
+          state.status === 'playing' && !!state.game && mySeatIdx !== null && state.game.actingSeat === mySeatIdx;
+        if (!stillMyTurn) this.yourTurn = null;
         // 手牌号变化且动画队列空闲：说明是重连/快照而非事件流 → 直接跳到最终画面
         const hand = state.game?.handNumber ?? 0;
         if (hand > 0 && this.currentHand !== hand && queueIdle()) {
@@ -138,6 +172,15 @@ export const useRoomStore = defineStore('room', {
       });
       socket.on(EV.LobbyRooms, (rooms: RoomSummary[]) => {
         this.lobbyRooms = rooms;
+      });
+      socket.on(EV.EmojiThrow, (p: EmojiThrowPayload) => {
+        this.emojiFlights.push({ id: ++flightId, ...p });
+        this.log(`向 ${p.toNickname} 扔出了 ${p.emoji}`, 'info', p.fromNickname);
+      });
+      socket.on(EV.DanmakuSend, (p: DanmakuPayload) => {
+        this.danmakus.push({ id: ++danmakuId, ...p });
+        this.log(`💬 ${p.text}`, 'info', p.nickname);
+        sfx.danmaku();
       });
       this.socketConnected = socket.connected;
     },
@@ -241,17 +284,17 @@ export const useRoomStore = defineStore('room', {
       return r.roomCode;
     },
 
-    async joinRoom(roomCode: string, nickname: string, playerId?: string): Promise<boolean> {
+    async joinRoom(roomCode: string, nickname: string, playerId?: string, password?: string): Promise<true | ApiErr> {
       this.joining = true;
       saveNickname(nickname);
       const r = await emitAck<
-        { roomCode: string; nickname: string; playerId?: string },
+        { roomCode: string; nickname: string; playerId?: string; password?: string },
         { playerId: string; roomCode: string; state: RoomState } | ApiErr
-      >(EV.RoomJoin, { roomCode: roomCode.toUpperCase(), nickname, playerId });
+      >(EV.RoomJoin, { roomCode: roomCode.toUpperCase(), nickname, playerId, password });
       this.joining = false;
       if (isErr(r)) {
         this.toast(r.message);
-        return false;
+        return r;
       }
       this.playerId = r.playerId;
       savePlayerId(r.roomCode, r.playerId);
@@ -295,6 +338,13 @@ export const useRoomStore = defineStore('room', {
       if (isErr(r)) this.toast(r.message);
     },
 
+    /** 房主踢出房间成员（被踢者由服务端广播 room:kicked，前端在 RoomView 处理） */
+    kickPlayer(playerId: string) {
+      socket.emit(EV.RoomKick, { playerId }, (r: { ok: true } | ApiErr) => {
+        if (isErr(r)) this.toast(r.message);
+      });
+    },
+
     /** 房主修改房间设置 */
     async configureRoom(options: CreateRoomOptions): Promise<boolean> {
       const r = await emitAck<{ options: CreateRoomOptions }, { ok: true } | ApiErr>(EV.RoomConfigure, { options });
@@ -334,6 +384,36 @@ export const useRoomStore = defineStore('room', {
       socket.emit(EV.GameShowCard, { cardIndex }, (r: { ok: true } | ApiErr) => {
         if (isErr(r)) this.toast(r.message);
       });
+    },
+
+    /** 打开/关闭某座位头像旁的表情选择盘 */
+    toggleEmojiPicker(seatIndex: number | null) {
+      this.emojiTargetSeat = this.emojiTargetSeat === seatIndex ? null : seatIndex;
+    },
+
+    /** 向某座位投掷表情（服务端校验后全员广播飞行动画） */
+    throwEmoji(toSeatIndex: number, emoji: string) {
+      this.emojiTargetSeat = null;
+      socket.emit(EV.EmojiThrow, { toSeatIndex, emoji }, (r: { ok: true } | ApiErr) => {
+        if (isErr(r)) this.toast(r.message);
+      });
+    },
+
+    /** 表情飞行动画播完，从队列移除 */
+    removeEmojiFlight(id: number) {
+      this.emojiFlights = this.emojiFlights.filter((f) => f.id !== id);
+    },
+
+    /** 发送弹幕 */
+    sendDanmaku(text: string, style: string) {
+      socket.emit(EV.DanmakuSend, { text, style }, (r: { ok: true } | ApiErr) => {
+        if (isErr(r)) this.toast(r.message);
+      });
+    },
+
+    /** 弹幕飘屏结束，从队列移除 */
+    removeDanmaku(id: number) {
+      this.danmakus = this.danmakus.filter((d) => d.id !== id);
     },
 
     async leaveRoom() {

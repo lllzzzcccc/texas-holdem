@@ -13,6 +13,10 @@ import HandSummary from '../components/HandSummary.vue';
 import ActionLog from '../components/ActionLog.vue';
 import RoomSettingsDialog from '../components/RoomSettingsDialog.vue';
 import ConfirmDialog from '../components/ConfirmDialog.vue';
+import DanmakuLayer from '../components/DanmakuLayer.vue';
+import DanmakuInput from '../components/DanmakuInput.vue';
+import MemberList from '../components/MemberList.vue';
+import BustDialog from '../components/BustDialog.vue';
 
 const props = defineProps<{ code: string }>();
 const router = useRouter();
@@ -26,7 +30,13 @@ const qrOpen = ref(false);
 const settingsOpen = ref(false);
 const dissolveOpen = ref(false);
 const logOpen = ref(window.innerWidth > 1100); // 宽屏默认展开记录侧栏
+const danmakuOpen = ref(false);
+const membersOpen = ref(false);
 const soundOn = ref(soundEnabled());
+
+// 加入门槛：设了密码的房间在首次加入失败后展示密码输入框
+const needPwd = ref(false);
+const password = ref('');
 
 function confirmDissolve() {
   dissolveOpen.value = false;
@@ -40,12 +50,19 @@ function onDissolved(p: { message: string }) {
   router.push('/');
 }
 
+/** 被房主踢出：提示并回大厅 */
+function onKicked(p: { message: string }) {
+  store.toast(p.message);
+  store.resetForRoom();
+  router.push('/');
+}
+
 // 房主易主提示：hostId 从别人变成自己时弹出说明
 watch(
   () => [store.room?.hostId, store.playerId] as const,
   ([hostId, myId], [prevHostId]) => {
     if (hostId && hostId === myId && prevHostId && prevHostId !== myId) {
-      store.banner('你已成为房主', '可以开始 / 暂停游戏、修改房间设置或解散房间', 3200);
+      store.banner('你已成为房主', '可以开始 / 结束本局、修改房间设置或解散房间', 3200);
       store.log('你已成为房主', 'info');
     }
   },
@@ -64,21 +81,31 @@ onMounted(async () => {
   store.wireSocket();
   store.resetForRoom();
   socket.on(EV.RoomDissolved, onDissolved);
+  socket.on(EV.RoomKicked, onKicked);
   if (!socket.connected) socket.connect();
   const nick = savedNickname();
   if (nick) {
-    await store.joinRoom(props.code, nick, savedPlayerId(props.code.toUpperCase()));
+    const r = await store.joinRoom(props.code, nick, savedPlayerId(props.code.toUpperCase()));
+    // 房间设了密码且非重连：自动加入被拒，展开密码输入框
+    if (r !== true && r.code === 'WRONG_PASSWORD') needPwd.value = true;
   }
 });
 
 onBeforeUnmount(() => {
   socket.off(EV.RoomDissolved, onDissolved);
+  socket.off(EV.RoomKicked, onKicked);
   store.leaveRoom();
 });
 
 async function joinWithNickname() {
   if (!nickname.value.trim()) return;
-  await store.joinRoom(props.code, nickname.value.trim(), savedPlayerId(props.code.toUpperCase()));
+  const r = await store.joinRoom(
+    props.code,
+    nickname.value.trim(),
+    savedPlayerId(props.code.toUpperCase()),
+    needPwd.value ? password.value : undefined,
+  );
+  if (r !== true && r.code === 'WRONG_PASSWORD') needPwd.value = true;
 }
 
 function onSit(pos: number) {
@@ -127,9 +154,20 @@ async function leaveRoom() {
     <div class="card-panel gate">
       <h2>加入房间 {{ code.toUpperCase() }}</h2>
       <input v-model="nickname" type="text" maxlength="12" placeholder="输入你的昵称" @keyup.enter="joinWithNickname" />
-      <button :disabled="!nickname.trim() || store.joining" @click="joinWithNickname">
+      <input
+        v-if="needPwd"
+        v-model="password"
+        type="password"
+        inputmode="numeric"
+        maxlength="4"
+        placeholder="4 位房间密码"
+        autocomplete="off"
+        @keyup.enter="joinWithNickname"
+      />
+      <button :disabled="!nickname.trim() || (needPwd && password.length !== 4) || store.joining" @click="joinWithNickname">
         {{ store.joining ? '加入中…' : '进入房间' }}
       </button>
+      <button class="ghost" @click="router.push('/')">返回大厅</button>
       <p v-if="store.errorMsg" class="gate-err">{{ store.errorMsg }}</p>
     </div>
   </div>
@@ -138,24 +176,52 @@ async function leaveRoom() {
     <!-- 顶栏 -->
     <header class="topbar">
       <div class="left">
-        <span class="room-code">房间 <strong>{{ store.room?.code }}</strong></span>
+        <span class="room-code">
+          房间 <strong>{{ store.room?.code }}</strong>
+          <span v-if="store.room?.isPrivate" class="priv-tag" title="私密房间：不出现在大厅，仅凭邀请加入">🔒</span>
+        </span>
         <span class="blinds">盲注 {{ store.room?.smallBlind }}/{{ store.room?.bigBlind }}</span>
+        <button
+          class="member-count"
+          :class="{ active: membersOpen }"
+          :title="`在座 ${store.seatedCount} 人 · 观战 ${store.room?.spectators.length ?? 0} 人`"
+          @click="membersOpen = !membersOpen"
+        >
+          👥 {{ store.seatedCount + (store.room?.spectators.length ?? 0) }}
+        </button>
         <span v-if="store.room?.game?.handNumber" class="hand-no">
           第 {{ store.room.game.handNumber }}{{ store.room.maxHands > 0 ? `/${store.room.maxHands}` : '' }} 手
         </span>
       </div>
       <div class="right">
-        <button class="ghost sm" :class="{ active: logOpen }" @click="logOpen = !logOpen">记录</button>
         <button class="ghost sm" @click="toggleSound">{{ soundOn ? '🔊' : '🔇' }}</button>
+        <button class="ghost sm" :class="{ active: logOpen }" @click="logOpen = !logOpen">记录</button>
         <button class="ghost sm" @click="qrOpen = true">邀请</button>
         <button v-if="store.isHost" class="ghost sm danger-text" @click="dissolveOpen = true">解散</button>
         <button class="ghost sm" @click="leaveRoom">离开</button>
       </div>
     </header>
 
+    <!-- 弹幕飘屏层 -->
+    <DanmakuLayer />
+
+    <!-- 弹幕入口：右下角悬浮按钮（结算面板冻结牌桌时也可用） -->
+    <button class="danmaku-fab" :class="{ active: danmakuOpen }" @click="danmakuOpen = !danmakuOpen">💬 弹幕</button>
+
+    <!-- 弹幕输入面板 -->
+    <DanmakuInput :open="danmakuOpen" @close="danmakuOpen = false" />
+
+    <!-- 房间成员列表（房主可踢人） -->
+    <MemberList :open="membersOpen" @close="membersOpen = false" />
+
+    <!-- 输光补码/离席决策弹窗（只对输光玩家显示，倒计时结束服务端自动离席） -->
+    <BustDialog />
+
     <!-- 牌桌 -->
     <main class="table-zone">
       <PokerTable @sit="onSit" />
+      <!-- 结算面板：只覆盖牌桌区域，顶栏按钮/右侧记录栏/弹幕入口保持可用 -->
+      <HandSummary />
     </main>
 
     <!-- 大厅控制条 -->
@@ -172,7 +238,7 @@ async function leaveRoom() {
     <div v-if="playing && (store.isSpectator || canRebuy || showStop)" class="game-bar">
       <span v-if="store.isSpectator" class="spec-badge">👁 观战中 · 游戏已开始，下一局可入座</span>
       <button v-if="canRebuy" class="ok sm" @click="openRebuy">补码继续</button>
-      <button v-if="showStop" class="danger sm" @click="store.stopGame()">暂停游戏</button>
+      <button v-if="showStop" class="danger sm" @click="store.stopGame()">结束本局</button>
     </div>
 
     <!-- 对局记录侧边栏 -->
@@ -208,7 +274,6 @@ async function leaveRoom() {
       @confirm="confirmDissolve"
       @close="dissolveOpen = false"
     />
-    <HandSummary />
   </div>
 </template>
 
@@ -245,6 +310,10 @@ async function leaveRoom() {
   letter-spacing: 2px;
   font-size: 16px;
 }
+.priv-tag {
+  margin-left: 4px;
+  font-size: 13px;
+}
 .blinds,
 .hand-no {
   font-size: 12px;
@@ -253,9 +322,41 @@ async function leaveRoom() {
   padding: 3px 10px;
   border-radius: 8px;
 }
+.member-count {
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--accent);
+  background: rgba(76, 201, 240, 0.12);
+  border: 1px solid rgba(76, 201, 240, 0.3);
+  padding: 3px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  line-height: 1.4;
+}
+.member-count:hover,
+.member-count.active {
+  background: rgba(76, 201, 240, 0.24);
+  border-color: var(--accent);
+}
 .sm {
   padding: 7px 14px;
   font-size: 13px;
+}
+
+/* 弹幕入口：右下角悬浮按钮（z 高于结算遮罩 90，旧浏览器兜底） */
+.danmaku-fab {
+  position: fixed;
+  right: 18px;
+  bottom: calc(18px + env(safe-area-inset-bottom));
+  z-index: 96;
+  padding: 11px 20px;
+  font-size: 15px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #3a86ff, #2667d6);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+}
+.danmaku-fab.active {
+  background: linear-gradient(180deg, #4cc9f0, #1d8fb8);
 }
 
 .table-zone {

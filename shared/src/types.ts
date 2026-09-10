@@ -113,6 +113,12 @@ export interface RoomState {
   turnTimeoutMs: number;
   /** 房间回合数上限（0 = 不限） */
   maxHands: number;
+  /** 私密房间（不出现在大厅列表，凭邀请加入） */
+  isPrivate: boolean;
+  /** 是否设置了加入密码（密码本身永不下发） */
+  hasPassword: boolean;
+  /** 输光玩家的补码决策阶段（非空 = 有玩家正在选择「买入继续 / 离开」，含截止时间戳） */
+  rebuyDecision: { seatIndexes: number[]; deadline: number } | null;
   game: GameState | null;
 }
 
@@ -125,6 +131,10 @@ export interface CreateRoomOptions {
   turnTimeoutSec?: number;
   /** 回合数上限（0 = 不限） */
   maxHands?: number;
+  /** 私密房间：不出现在大厅列表，只能凭房主分享的房间号/二维码加入 */
+  isPrivate?: boolean;
+  /** 加入密码：4 位数字；'' 表示清除密码；undefined 表示不修改 */
+  password?: string;
 }
 
 /** 服务器下发的合法行动（客户端只渲染，不自行计算规则） */
@@ -190,6 +200,7 @@ export const EV = {
   RoomLeave: 'room:leave',
   RoomDissolve: 'room:dissolve',
   RoomConfigure: 'room:configure',
+  RoomKick: 'room:kick',
   LobbyTakeSeat: 'lobby:takeSeat',
   LobbyLeaveSeat: 'lobby:leaveSeat',
   GameStart: 'game:start',
@@ -199,17 +210,48 @@ export const EV = {
   GameNextHand: 'game:nextHand',
   GameDrawCard: 'game:drawCard',
   GameShowCard: 'game:showCard',
+  EmojiThrow: 'emoji:throw',
+  DanmakuSend: 'danmaku:send',
   LobbyList: 'hall:list',
   LobbySubscribe: 'hall:subscribe',
   LobbyUnsubscribe: 'hall:unsubscribe',
   // S→C
   RoomState: 'room:state',
   RoomDissolved: 'room:dissolved',
+  RoomKicked: 'room:kicked',
   GameEvent: 'game:event',
   HoleCards: 'game:holeCards',
   YourTurn: 'game:yourTurn',
   LobbyRooms: 'hall:rooms',
 } as const;
+
+/** 表情投掷：可选表情预设（服务端校验白名单） */
+export const EMOJI_PRESETS = ['😄', '😂', '😍', '😎', '😡', '😭', '👍', '💣', '🎉', '🌹'] as const;
+export type EmojiPreset = (typeof EMOJI_PRESETS)[number];
+
+/** 弹幕样式预设（服务端校验白名单） */
+export const DANMAKU_STYLES = ['classic', 'gold', 'neon', 'bubble', 'rainbow'] as const;
+export type DanmakuStyle = (typeof DANMAKU_STYLES)[number];
+
+/** 弹幕正文最大长度（字符） */
+export const DANMAKU_MAX_LEN = 40;
+
+/** 表情投掷广播载荷（S→C） */
+export interface EmojiThrowPayload {
+  fromSeatIndex: number;
+  toSeatIndex: number;
+  emoji: EmojiPreset;
+  fromNickname: string;
+  toNickname: string;
+}
+
+/** 弹幕广播载荷（S→C） */
+export interface DanmakuPayload {
+  seatIndex: number | null;
+  nickname: string;
+  text: string;
+  style: DanmakuStyle;
+}
 
 /** 大厅同时容纳的牌桌上限 */
 export const LOBBY_MAX_ROOMS = 10;
@@ -233,12 +275,14 @@ export interface ClientToServerEvents {
     cb: (r: JoinedPayload | ApiError) => void,
   ) => void;
   [EV.RoomJoin]: (
-    p: { roomCode: string; nickname: string; playerId?: string },
+    p: { roomCode: string; nickname: string; playerId?: string; password?: string },
     cb: (r: JoinedPayload | ApiError) => void,
   ) => void;
   [EV.RoomLeave]: (p: Record<string, never>, cb?: (r: { ok: true } | ApiError) => void) => void;
   [EV.RoomDissolve]: (p: Record<string, never>, cb?: (r: { ok: true } | ApiError) => void) => void;
   [EV.RoomConfigure]: (p: { options: CreateRoomOptions }, cb: (r: { ok: true } | ApiError) => void) => void;
+  /** 房主踢出房间内成员（手牌进行中的在座玩家不可踢） */
+  [EV.RoomKick]: (p: { playerId: string }, cb: (r: { ok: true } | ApiError) => void) => void;
   [EV.LobbyTakeSeat]: (p: { seatIndex: number; buyIn: number }, cb: (r: { ok: true } | ApiError) => void) => void;
   [EV.LobbyLeaveSeat]: (p: Record<string, never>, cb?: (r: { ok: true } | ApiError) => void) => void;
   [EV.GameStart]: (p: Record<string, never>, cb: (r: { ok: true } | ApiError) => void) => void;
@@ -253,6 +297,10 @@ export interface ClientToServerEvents {
   [EV.GameDrawCard]: (p: { deckIndex: number }, cb: (r: { ok: true } | ApiError) => void) => void;
   /** 结算阶段亮出自己的一张底牌（0 或 1），亮出后所有人可见 */
   [EV.GameShowCard]: (p: { cardIndex: number }, cb: (r: { ok: true } | ApiError) => void) => void;
+  /** 向某个座位投掷表情（点击该座位头像后选择） */
+  [EV.EmojiThrow]: (p: { toSeatIndex: number; emoji: string }, cb: (r: { ok: true } | ApiError) => void) => void;
+  /** 发送一条弹幕 */
+  [EV.DanmakuSend]: (p: { text: string; style: string }, cb: (r: { ok: true } | ApiError) => void) => void;
   [EV.LobbyList]: (p: Record<string, never>, cb: (r: { rooms: RoomSummary[] }) => void) => void;
   [EV.LobbySubscribe]: (p: Record<string, never>) => void;
   [EV.LobbyUnsubscribe]: (p: Record<string, never>) => void;
@@ -261,8 +309,11 @@ export interface ClientToServerEvents {
 export interface ServerToClientEvents {
   [EV.RoomState]: (state: RoomState) => void;
   [EV.RoomDissolved]: (p: { message: string }) => void;
+  [EV.RoomKicked]: (p: { message: string }) => void;
   [EV.GameEvent]: (ev: GameEvent) => void;
   [EV.HoleCards]: (p: HoleCardsPayload) => void;
   [EV.YourTurn]: (p: LegalActions) => void;
   [EV.LobbyRooms]: (rooms: RoomSummary[]) => void;
+  [EV.EmojiThrow]: (p: EmojiThrowPayload) => void;
+  [EV.DanmakuSend]: (p: DanmakuPayload) => void;
 }
