@@ -50,7 +50,7 @@ npm start          # Node 单进程托管前端 + socket.io，默认 :3000
 ```bash
 git clone https://github.com/lllzzzcccc/texas-holdem.git /opt/texas-holdem
 cd /opt/texas-holdem
-# 配置域名（用于 Nginx server_name、证书签发与二维码链接）
+# 配置域名（用于证书签发与二维码链接；nginx server_name 在 deploy/nginx.conf 中硬编码，换域名时一并替换）
 echo 'DOMAIN=poker.example.com
 PUBLIC_URL=https://poker.example.com/texas-holdem' > .env
 docker compose up -d --build

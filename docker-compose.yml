@@ -19,11 +19,10 @@ services:
     ports:
       - "80:80"
       - "443:443"
-    environment:
-      # 供 nginx.conf.template 的 envsubst 使用
-      DOMAIN: ${DOMAIN:-chammmsblog.site}
     volumes:
-      - ./deploy/nginx.conf.template:/etc/nginx/templates/default.conf.template:ro
+      # 静态配置直接挂进 conf.d（不走 envsubst 模板：自定义 command 以 sh 开头时
+      # 官方 entrypoint 会跳过模板渲染，导致配置不生效）
+      - ./deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
       - letsencrypt:/etc/letsencrypt
       - certbot-webroot:/var/www/certbot
     depends_on:
