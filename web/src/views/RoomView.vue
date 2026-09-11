@@ -32,6 +32,7 @@ const dissolveOpen = ref(false);
 const logOpen = ref(window.innerWidth > 1100); // 宽屏默认展开记录侧栏
 const danmakuOpen = ref(false);
 const membersOpen = ref(false);
+const menuOpen = ref(false);
 const soundOn = ref(soundEnabled());
 
 // 加入门槛：设了密码的房间在首次加入失败后展示密码输入框
@@ -76,6 +77,7 @@ function toggleSound() {
 const joined = computed(() => store.joined);
 const lobby = computed(() => store.room?.status === 'lobby');
 const playing = computed(() => store.room?.status === 'playing');
+const actionOpen = computed(() => !!store.yourTurn);
 
 onMounted(async () => {
   store.wireSocket();
@@ -142,6 +144,12 @@ const showStop = computed(
   () => store.isHost && playing.value && (!store.room?.game || store.phase === 'idle' || store.phase === 'hand_end'),
 );
 
+const lobbyHint = computed(() => {
+  if (store.canStart) return `点击空座位购买积分并入座（${store.seatedCount}/${store.room?.maxSeats ?? 9}）`;
+  if (store.isHost) return '至少 2 人入座后可开始';
+  return '等待房主开始游戏…';
+});
+
 async function leaveRoom() {
   await store.leaveRoom();
   router.push('/');
@@ -172,7 +180,7 @@ async function leaveRoom() {
     </div>
   </div>
 
-  <div v-else class="room" :class="{ 'log-open': logOpen }">
+  <div v-else class="room" :class="{ 'log-open': logOpen, 'action-open': actionOpen }" @click="menuOpen = false">
     <!-- 顶栏 -->
     <header class="topbar">
       <div class="left">
@@ -180,6 +188,7 @@ async function leaveRoom() {
           房间 <strong>{{ store.room?.code }}</strong>
           <span v-if="store.room?.isPrivate" class="priv-tag" title="私密房间：不出现在大厅，仅凭邀请加入">🔒</span>
         </span>
+        <span v-if="store.isHost" class="host-tag" title="你是房主">房主</span>
         <span class="blinds">盲注 {{ store.room?.smallBlind }}/{{ store.room?.bigBlind }}</span>
         <button
           class="member-count"
@@ -194,13 +203,39 @@ async function leaveRoom() {
         </span>
       </div>
       <div class="right">
-        <button class="ghost sm" @click="toggleSound">{{ soundOn ? '🔊' : '🔇' }}</button>
-        <button class="ghost sm" :class="{ active: logOpen }" @click="logOpen = !logOpen">记录</button>
-        <button class="ghost sm" @click="qrOpen = true">邀请</button>
-        <button v-if="store.isHost" class="ghost sm danger-text" @click="dissolveOpen = true">解散</button>
-        <button class="ghost sm" @click="leaveRoom">离开</button>
+        <button class="ghost sm menu-toggle" @click.stop="menuOpen = !menuOpen">{{ menuOpen ? '✕' : '☰' }}</button>
       </div>
     </header>
+
+    <!-- 顶部展开菜单：放在顶栏外，避免被对局记录侧栏压住 -->
+    <transition name="fade">
+      <div v-if="menuOpen" class="menu-dropdown" @click.stop>
+        <button class="menu-item" @click="toggleSound()">
+          <span class="mi-icon">{{ soundOn ? '🔊' : '🔇' }}</span>
+          <span>{{ soundOn ? '静音' : '开启音效' }}</span>
+        </button>
+        <button class="menu-item" :class="{ active: logOpen }" @click="logOpen = !logOpen; menuOpen = false">
+          <span class="mi-icon">📝</span>
+          <span>记录</span>
+        </button>
+        <button class="menu-item" @click="qrOpen = true; menuOpen = false">
+          <span class="mi-icon">🔗</span>
+          <span>邀请</span>
+        </button>
+        <button
+          v-if="store.isHost"
+          class="menu-item danger-text"
+          @click="dissolveOpen = true; menuOpen = false"
+        >
+          <span class="mi-icon">🗑️</span>
+          <span>解散</span>
+        </button>
+        <button class="menu-item leave" @click="leaveRoom(); menuOpen = false">
+          <span class="mi-icon">🚪</span>
+          <span>离开</span>
+        </button>
+      </div>
+    </transition>
 
     <!-- 弹幕飘屏层 -->
     <DanmakuLayer />
@@ -226,19 +261,44 @@ async function leaveRoom() {
 
     <!-- 大厅控制条 -->
     <div v-if="lobby" class="lobby-bar">
-      <span class="hint-text">点击空座位购买积分并入座（{{ store.seatedCount }}/{{ store.room?.maxSeats ?? 9 }}）</span>
-      <button v-if="store.canStart" class="start-btn" @click="store.startGame()">开始游戏</button>
-      <span v-else-if="store.isHost" class="hint-text">至少 2 人入座后可开始</span>
-      <span v-else class="hint-text">等待房主开始游戏…</span>
-      <button v-if="store.isSeated" class="ghost sm" @click="store.leaveSeat()">离座</button>
-      <button v-if="store.isHost" class="ghost sm" @click="settingsOpen = true">设置</button>
+      <div class="lobby-hint">{{ lobbyHint }}</div>
+      <div class="lobby-actions">
+        <button v-if="store.canStart" class="start-btn" @click="store.startGame()">
+          <span class="btn-icon">▶</span>
+          <span class="btn-label">开始</span>
+        </button>
+        <button v-if="store.isSeated" class="ghost sm" @click="store.leaveSeat()">
+          <span class="btn-icon">🏃</span>
+          <span class="btn-label">离座</span>
+        </button>
+        <button v-if="store.isHost" class="ghost sm" @click="settingsOpen = true">
+          <span class="btn-icon">⚙</span>
+          <span class="btn-label">设置</span>
+        </button>
+        <button class="ghost sm danmaku-mobile" @click="danmakuOpen = !danmakuOpen">
+          <span class="btn-icon">💬</span>
+          <span class="btn-label">弹幕</span>
+        </button>
+      </div>
     </div>
 
     <!-- 游戏中控制条（仅在有内容时渲染，避免空胶囊占位） -->
     <div v-if="playing && (store.isSpectator || canRebuy || showStop)" class="game-bar">
       <span v-if="store.isSpectator" class="spec-badge">👁 观战中 · 游戏已开始，下一局可入座</span>
-      <button v-if="canRebuy" class="ok sm" @click="openRebuy">补码继续</button>
-      <button v-if="showStop" class="danger sm" @click="store.stopGame()">结束本局</button>
+      <div class="game-actions">
+        <button v-if="canRebuy" class="ok sm" @click="openRebuy">
+          <span class="btn-icon">💰</span>
+          <span class="btn-label">补码</span>
+        </button>
+        <button v-if="showStop" class="danger sm" @click="store.stopGame()">
+          <span class="btn-icon">⏹</span>
+          <span class="btn-label">结束</span>
+        </button>
+        <button class="ghost sm danmaku-mobile" @click="danmakuOpen = !danmakuOpen">
+          <span class="btn-icon">💬</span>
+          <span class="btn-label">弹幕</span>
+        </button>
+      </div>
     </div>
 
     <!-- 对局记录侧边栏 -->
@@ -314,6 +374,16 @@ async function leaveRoom() {
   margin-left: 4px;
   font-size: 13px;
 }
+.host-tag {
+  font-size: 11px;
+  font-weight: 700;
+  color: #3a2c00;
+  background: linear-gradient(180deg, #ffd700, #b8860b);
+  padding: 2px 8px;
+  border-radius: 6px;
+  margin-left: 2px;
+  line-height: 1.2;
+}
 .blinds,
 .hand-no {
   font-size: 12px;
@@ -342,6 +412,12 @@ async function leaveRoom() {
   padding: 7px 14px;
   font-size: 13px;
 }
+.btn-icon {
+  display: none;
+}
+.danmaku-mobile {
+  display: none;
+}
 
 /* 弹幕入口：右下角悬浮按钮（z 高于结算遮罩 90，旧浏览器兜底） */
 .danmaku-fab {
@@ -357,6 +433,10 @@ async function leaveRoom() {
 }
 .danmaku-fab.active {
   background: linear-gradient(180deg, #4cc9f0, #1d8fb8);
+}
+/* 行动面板展开时：把弹幕按钮抬高，避免被下注按钮遮挡 */
+.room.action-open .danmaku-fab {
+  bottom: calc(90px + env(safe-area-inset-bottom));
 }
 
 .table-zone {
@@ -396,16 +476,22 @@ async function leaveRoom() {
   margin: 4px auto calc(10px + env(safe-area-inset-bottom, 0px));
   flex-shrink: 0;
 }
+.lobby-hint {
+  color: var(--text-dim);
+  font-size: 13px;
+}
+.lobby-actions,
+.game-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
 .ghost.sm.active {
   background: rgba(255, 215, 0, 0.18);
   color: var(--gold);
 }
 .ghost.sm.danger-text {
   color: #ff8080;
-}
-.hint-text {
-  color: var(--text-dim);
-  font-size: 13px;
 }
 .start-btn {
   background: linear-gradient(180deg, #ffd700, #b8860b);
@@ -416,6 +502,66 @@ async function leaveRoom() {
 .spec-badge {
   color: #ffd966;
   font-size: 13px;
+}
+
+/* 顶部展开菜单 */
+.right {
+  position: relative;
+}
+.menu-toggle {
+  font-size: 18px;
+  line-height: 1;
+  padding: 6px 12px;
+}
+.menu-toggle.active {
+  background: rgba(255, 255, 255, 0.12);
+}
+.menu-dropdown {
+  position: fixed;
+  top: 50px;
+  right: 10px;
+  min-width: 150px;
+  background: rgba(18, 24, 30, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 12px;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(10px);
+  z-index: 100;
+}
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 12px;
+  border-radius: 8px;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  box-shadow: none;
+  transition: background 0.15s;
+}
+.menu-item:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+.menu-item.active {
+  color: var(--gold);
+  background: rgba(255, 215, 0, 0.12);
+}
+.menu-item.danger-text {
+  color: #ff8080;
+}
+.mi-icon {
+  font-size: 15px;
+  width: 20px;
+  text-align: center;
 }
 
 .gate {
@@ -496,7 +642,8 @@ async function leaveRoom() {
 /* ---------- 移动端 ---------- */
 @media (max-width: 640px) {
   .table-zone {
-    padding: 0 2px;
+    /* 顶部留白：给牌桌顶部座位的底牌/头像留出空间，避免与上方顶栏按钮重叠 */
+    padding: 42px 2px 0;
   }
   .topbar {
     font-size: 12px;
@@ -506,18 +653,77 @@ async function leaveRoom() {
     font-size: 11px;
     padding: 2px 8px;
   }
+  .host-tag {
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 5px;
+  }
+  .menu-toggle {
+    padding: 5px 10px;
+  }
+  .menu-dropdown {
+    right: 10px;
+    top: 46px;
+  }
   .lobby-bar,
   .game-bar {
+    width: auto;
+    max-width: 94vw;
+    margin: 0 auto calc(8px + env(safe-area-inset-bottom, 0px));
+    border-radius: 16px;
     padding: 8px 14px;
-    gap: 8px;
-    margin: 2px auto calc(6px + env(safe-area-inset-bottom, 0px));
+    gap: 6px;
+    flex-wrap: wrap;
+    background: rgba(0, 0, 0, 0.55);
+    justify-content: center;
   }
-  .hint-text {
+  .lobby-bar {
+    flex-direction: column;
+  }
+  .lobby-hint,
+  .game-bar .spec-badge {
+    font-size: 10px;
+    text-align: center;
+    color: var(--text-dim);
+    line-height: 1.2;
+  }
+  .lobby-actions,
+  .game-actions {
+    width: auto;
+    justify-content: center;
+    gap: 6px;
+  }
+  .lobby-actions button,
+  .game-actions button {
+    flex: 0 0 auto;
+    min-width: 0;
+    padding: 6px 12px;
     font-size: 12px;
+    border-radius: 10px;
+  }
+  .lobby-actions button .btn-icon,
+  .game-actions button .btn-icon {
+    display: none;
+  }
+  .game-bar {
+    flex-direction: column;
+  }
+  .danmaku-fab {
+    display: inline-block;
+    right: 12px;
+    bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+    padding: 9px 16px;
+    font-size: 14px;
+  }
+  .danmaku-mobile {
+    display: none;
+  }
+  .room.action-open .danmaku-fab {
+    bottom: calc(100px + env(safe-area-inset-bottom, 0px));
   }
   .start-btn {
-    font-size: 15px;
-    padding: 10px 26px;
+    font-size: 13px;
+    padding: 6px 12px;
   }
   .banners {
     top: 6%;

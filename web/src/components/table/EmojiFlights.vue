@@ -51,8 +51,7 @@ watch(
           });
         },
         onComplete() {
-          sfx.emojiPop();
-          // 命中后弹跳淡出
+          // 命中后弹跳淡出（不额外播放命中音效，避免与投掷音重叠）
           gsap.to(el, {
             scale: 1.6,
             opacity: 0,

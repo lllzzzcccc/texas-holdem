@@ -98,6 +98,26 @@ function pickEmoji(emoji: string) {
   if (!props.seat) return;
   store.throwEmoji(props.seat.seatIndex, emoji);
 }
+
+// 表情面板打开时：点击面板/头像以外的任意地方自动收起
+let pickerOutsideHandler: ((e: MouseEvent) => void) | null = null;
+watch(pickerOpen, (open) => {
+  if (open) {
+    pickerOutsideHandler = (e: MouseEvent) => {
+      const el = wrapper.value;
+      if (!el) return;
+      if (el.contains(e.target as Node)) return;
+      store.toggleEmojiPicker(null);
+    };
+    document.addEventListener('mousedown', pickerOutsideHandler);
+  } else if (pickerOutsideHandler) {
+    document.removeEventListener('mousedown', pickerOutsideHandler);
+    pickerOutsideHandler = null;
+  }
+});
+onBeforeUnmount(() => {
+  if (pickerOutsideHandler) document.removeEventListener('mousedown', pickerOutsideHandler);
+});
 </script>
 
 <template>
@@ -142,14 +162,16 @@ function pickEmoji(emoji: string) {
         </transition>
 
         <div class="plate">
-          <div class="nick">{{ seat.nickname }}</div>
+          <div class="nick-line">
+            <span class="nick">{{ seat.nickname }}</span>
+            <span v-if="isMe" class="me-tag">我</span>
+          </div>
           <div class="stack">
             <template v-if="seat.stack > 0">{{ formatChips(seat.stack) }}</template>
             <template v-else>已淘汰</template>
           </div>
         </div>
         <div v-if="seat.isDealer" class="dealer-btn">D</div>
-        <div v-if="isMe" class="me-tag">我</div>
         <div v-if="seat.isAllIn" class="allin-tag">ALL-IN</div>
       </div>
 
@@ -227,17 +249,16 @@ function pickEmoji(emoji: string) {
   box-shadow: 0 0 10px rgba(76, 201, 240, 0.25);
 }
 .me-tag {
-  position: absolute;
-  left: -6px;
-  top: -10px;
+  display: inline-block;
   background: linear-gradient(180deg, #4cc9f0, #1d8fb8);
   color: #06222c;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 800;
-  border-radius: 8px;
-  padding: 1px 7px;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
-  z-index: 5;
+  border-radius: 6px;
+  padding: 0 5px;
+  margin-left: 4px;
+  vertical-align: middle;
+  line-height: 1.3;
 }
 
 .avatar {
@@ -291,12 +312,13 @@ function pickEmoji(emoji: string) {
   position: fixed;
   inset: 0;
   background: transparent;
-  z-index: -1;
+  z-index: 79;
 }
 .emoji-picker {
   position: absolute;
   right: 0;
   top: 0;
+  z-index: 81;
   display: grid;
   grid-template-columns: repeat(5, 1fr);
   gap: 4px;
@@ -359,13 +381,20 @@ function pickEmoji(emoji: string) {
   text-align: center;
   min-width: 84px;
 }
+.nick-line {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 0;
+}
 .nick {
   font-size: 12px;
   color: #fff;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 110px;
+  max-width: 84px;
 }
 .stack {
   font-size: 12px;

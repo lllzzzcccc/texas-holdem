@@ -115,6 +115,8 @@ export function attachGateway(io: IO, manager: RoomManager): void {
           session.roomCode = room.code;
           socket.join(`room:${room.code}`);
           cb({ playerId: player.id, roomCode: room.code, state: room.buildState(player.id) });
+          // 广播给房内所有在线玩家（新人加入/重连），让顶栏人数、成员面板、大厅列表即时刷新
+          room.notifyState();
         },
       ),
     );

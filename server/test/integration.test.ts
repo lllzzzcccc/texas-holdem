@@ -338,6 +338,27 @@ describe('Socket 集成冒烟测试', () => {
     for (const c of managerRef.listCodes()) managerRef.remove(c);
   }, 20000);
 
+  it('加入房间：房内玩家即时收到状态广播（人数实时 +1，无需刷新）', async () => {
+    const a = await connectClient('A');
+    const created = await emitAck<JoinedPayload>(a, EV.RoomCreate, { nickname: '房主' });
+    const code = created.roomCode;
+
+    // B 加入 → A 应立即收到包含 B 的观战列表广播
+    const aSeesB = waitForEvent<RoomState>(a, EV.RoomState, (s) =>
+      s.spectators.some((sp) => sp.nickname === '新人'),
+    );
+    const b = await connectClient('B');
+    const joined = await emitAck<JoinedPayload>(b, EV.RoomJoin, { roomCode: code, nickname: '新人' });
+    expect(joined.roomCode).toBe(code);
+
+    const st = await aSeesB;
+    expect(st.spectators.some((sp) => sp.nickname === '新人')).toBe(true);
+
+    a.close();
+    b.close();
+    for (const c of managerRef.listCodes()) managerRef.remove(c);
+  }, 20000);
+
   it('房主权利：修改设置、离开按加入顺序转移房主、解散房间、无房主立即销毁', async () => {
     const a = await connectClient('h1');
     const b = await connectClient('h2');

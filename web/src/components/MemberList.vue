@@ -33,45 +33,59 @@ function confirmKick() {
 
 <template>
   <transition name="fade">
-    <div v-if="open" class="member-panel card-panel" @click.self="emit('close')">
-      <div class="mp-head">
-        <span class="mp-title">房间成员（{{ rows.length }}）</span>
-        <button class="mp-close" @click="emit('close')">✕</button>
-      </div>
-      <ul class="mp-list">
-        <li v-for="r in rows" :key="r.id" class="mp-row">
-          <div class="mp-id">
-            <span class="mp-name">{{ r.name }}</span>
-            <span class="mp-tag">{{ r.tag }}</span>
-            <span v-if="r.id === store.room?.hostId" class="mp-host">房主</span>
-            <span v-if="r.id === store.playerId" class="mp-me">我</span>
-          </div>
-          <button
-            v-if="canKick && r.id !== store.playerId"
-            class="mp-kick"
-            @click="kickTarget = { id: r.id, name: r.name }"
-          >
-            踢出
-          </button>
-        </li>
-      </ul>
-      <p v-if="!canKick" class="mp-hint">仅房主可以踢出成员</p>
+    <div v-if="open" class="member-wrapper">
+      <div class="member-backdrop" @click="emit('close')" />
+      <div class="member-panel card-panel" @click.stop>
+        <div class="mp-head">
+          <span class="mp-title">房间成员（{{ rows.length }}）</span>
+          <button class="mp-close" @click="emit('close')">✕</button>
+        </div>
+        <ul class="mp-list">
+          <li v-for="r in rows" :key="r.id" class="mp-row">
+            <div class="mp-id">
+              <span class="mp-name">{{ r.name }}</span>
+              <span class="mp-tag">{{ r.tag }}</span>
+              <span v-if="r.id === store.room?.hostId" class="mp-host">房主</span>
+              <span v-if="r.id === store.playerId" class="mp-me">我</span>
+            </div>
+            <button
+              v-if="canKick && r.id !== store.playerId"
+              class="mp-kick"
+              @click="kickTarget = { id: r.id, name: r.name }"
+            >
+              踢出
+            </button>
+          </li>
+        </ul>
+        <p v-if="!canKick" class="mp-hint">仅房主可以踢出成员</p>
 
-      <ConfirmDialog
-        :open="kickTarget !== null"
-        title="踢出成员"
-        :message="`确定将「${kickTarget?.name ?? ''}」请出房间吗？`"
-        confirm-text="踢出"
-        @confirm="confirmKick"
-        @close="kickTarget = null"
-      />
+        <ConfirmDialog
+          :open="kickTarget !== null"
+          title="踢出成员"
+          :message="`确定将「${kickTarget?.name ?? ''}」请出房间吗？`"
+          confirm-text="踢出"
+          @confirm="confirmKick"
+          @close="kickTarget = null"
+        />
+      </div>
     </div>
   </transition>
 </template>
 
 <style scoped>
-.member-panel {
+.member-wrapper {
   position: fixed;
+  inset: 0;
+  z-index: 98;
+  pointer-events: none;
+}
+.member-backdrop {
+  position: absolute;
+  inset: 0;
+  pointer-events: auto;
+}
+.member-panel {
+  position: absolute;
   top: 52px;
   left: 12px;
   width: min(280px, calc(100vw - 24px));
@@ -80,7 +94,7 @@ function confirmKick() {
   flex-direction: column;
   gap: 8px;
   padding: 12px;
-  z-index: 98;
+  pointer-events: auto;
 }
 .mp-head {
   display: flex;

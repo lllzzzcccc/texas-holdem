@@ -33,40 +33,54 @@ function close() {
 
 <template>
   <transition name="slide">
-    <div v-if="props.open" class="danmaku-panel">
-      <div class="dm-row">
-        <input
-          v-model="text"
-          type="text"
-          :maxlength="DANMAKU_MAX_LEN"
-          :placeholder="`发条弹幕吧（最长 ${DANMAKU_MAX_LEN} 字）`"
-          @keyup.enter="send"
-        />
-        <button class="dm-send" :disabled="!text.trim()" @click="send">发送</button>
-        <button class="dm-close" title="关闭" @click="close">✕</button>
-      </div>
-      <div class="dm-styles">
-        <button
-          v-for="s in DANMAKU_STYLES"
-          :key="s"
-          class="dm-style-chip"
-          :class="[`st-${s}`, { active: style === s }]"
-          @click="style = s"
-        >
-          {{ STYLE_LABELS[s] }}
-        </button>
+    <div v-if="props.open" class="danmaku-wrapper">
+      <div class="danmaku-backdrop" @click="close" />
+      <div class="danmaku-panel" @click.stop>
+        <div class="dm-row">
+          <input
+            v-model="text"
+            type="text"
+            :maxlength="DANMAKU_MAX_LEN"
+            :placeholder="`发条弹幕吧（最长 ${DANMAKU_MAX_LEN} 字）`"
+            @keyup.enter="send"
+          />
+          <button class="dm-send" :disabled="!text.trim()" @click="send">发送</button>
+          <button class="dm-close" title="关闭" @click="close">✕</button>
+        </div>
+        <div class="dm-styles">
+          <button
+            v-for="s in DANMAKU_STYLES"
+            :key="s"
+            class="dm-style-chip"
+            :class="[`st-${s}`, { active: style === s }]"
+            @click="style = s"
+          >
+            {{ STYLE_LABELS[s] }}
+          </button>
+        </div>
       </div>
     </div>
   </transition>
 </template>
 
 <style scoped>
-.danmaku-panel {
+.danmaku-wrapper {
   position: fixed;
+  inset: 0;
+  z-index: 97;
+  pointer-events: none;
+}
+.danmaku-backdrop {
+  position: absolute;
+  inset: 0;
+  pointer-events: auto;
+}
+.danmaku-panel {
+  position: absolute;
   left: 50%;
   bottom: 18px;
   transform: translateX(-50%);
-  z-index: 97;
+  z-index: 1;
   width: min(560px, 92vw);
   background: rgba(10, 20, 30, 0.94);
   border: 1px solid rgba(255, 255, 255, 0.16);
@@ -77,6 +91,7 @@ function close() {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  pointer-events: auto;
 }
 .dm-row {
   display: flex;
