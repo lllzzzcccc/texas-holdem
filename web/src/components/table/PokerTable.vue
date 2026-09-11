@@ -92,9 +92,11 @@ function registerSpreadEl(i: number, el: Element | ComponentPublicInstance | nul
 
 /** 摊开牌堆的弧形布局：第 i 张牌的位移与旋转 */
 function spreadStyle(i: number) {
-  const pitch = portrait.value ? 6.2 : 11;
-  const norm = (i - 25.5) / 25.5; // -1 ~ 1
-  const x = (i - 25.5) * pitch;
+  const total = drawState.value?.spreadSize ?? 11;
+  const pitch = portrait.value ? 6.2 : 10.5;
+  const center = (total - 1) / 2;
+  const norm = (i - center) / Math.max(1, center); // -1 ~ 1
+  const x = (i - center) * pitch;
   const y = norm * norm * 24; // 两端上翘的弧线
   const rot = norm * 6;
   return { transform: `translate(calc(-50% + ${x}px), ${y}px) rotate(${rot}deg)`, zIndex: i + 1 };
@@ -163,7 +165,7 @@ const drawTip = computed(() => {
     <!-- 抽牌定庄：摊开的一堆盖牌，玩家各自点击抽一张 -->
     <div v-if="isDealerDraw && drawState" class="draw-spread">
       <div
-        v-for="i in 52"
+        v-for="i in drawState.spreadSize"
         :key="i - 1"
         :ref="(el) => registerSpreadEl(i - 1, el)"
         class="spread-card"
@@ -230,7 +232,7 @@ const drawTip = computed(() => {
     aspect-ratio: 1000 / 560;
   }
   .table-outer.portrait {
-    width: min(94%, calc(90cqh * 0.62));
+    width: min(94%, calc(92cqh * 0.62));
     aspect-ratio: 620 / 1000;
   }
 }
@@ -479,7 +481,7 @@ const drawTip = computed(() => {
 
 /* 竖屏手机：窄高椭圆 + 最小座位缩放 */
 .table-outer.portrait {
-  --seat-scale: 0.7;
+  --seat-scale: 0.65;
 }
 .table-outer.portrait .board {
   gap: 4px;

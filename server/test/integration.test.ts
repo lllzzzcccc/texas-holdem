@@ -269,7 +269,7 @@ describe('Socket 集成冒烟测试', () => {
     expect(dupDraw.code).toBeTruthy();
     const sameDraw = await emitAck<{ code: string }>(b, EV.GameDrawCard, { deckIndex: 7 });
     expect(sameDraw.code).toBeTruthy();
-    const drawB = await emitAck<{ ok: true }>(b, EV.GameDrawCard, { deckIndex: 20 });
+    const drawB = await emitAck<{ ok: true }>(b, EV.GameDrawCard, { deckIndex: 4 });
     expect(drawB.ok).toBe(true);
 
     // 双方收到各自底牌（各 2 张且不同）

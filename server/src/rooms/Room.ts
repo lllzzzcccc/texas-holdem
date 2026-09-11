@@ -392,10 +392,10 @@ export class Room {
     this.handNumber = 0;
     this.seq = 0;
 
-    // 开局抽牌定庄：52 张盖牌摊在桌面，由玩家各自点击抽一张，全部抽完统一揭晓
+    // 开局抽牌定庄：摊开 maxSeats+2 张盖牌在桌面，由玩家各自点击抽一张，全部抽完统一揭晓
     const deck = new Deck();
     this.dealerDraw = {
-      pool: Array.from({ length: 52 }, () => deck.draw()),
+      pool: Array.from({ length: this.maxSeats + 2 }, () => deck.draw()),
       taken: new Map(),
       revealed: false,
       dealerSeat: null,
@@ -898,6 +898,7 @@ export class Room {
           })),
           deadline: this.drawDeadline,
           dealerSeat: dd.dealerSeat,
+          spreadSize: dd.pool.length,
         },
         showdown: null,
         awards: null,

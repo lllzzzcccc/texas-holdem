@@ -47,7 +47,7 @@ export interface PotState {
 }
 
 export interface DealerDrawState {
-  /** 牌堆中仍可抽的位置索引（共 52 张盖牌摊开放在桌面） */
+  /** 牌堆中仍可抽的位置索引（抽牌定庄摊开的盖牌，数量 = maxSeats + 2） */
   available: number[];
   /** 已抽的座位：牌堆索引 + 牌面（全部抽完揭晓前 card 为 null） */
   draws: { seatIndex: number; deckIndex: number; card: CardStr | null }[];
@@ -55,6 +55,8 @@ export interface DealerDrawState {
   deadline: number | null;
   /** 抽牌结果确定的庄家座位（未定前为 null） */
   dealerSeat: number | null;
+  /** 桌面摊开的盖牌总数（供前端决定渲染多少张） */
+  spreadSize: number;
 }
 
 export interface ShowdownEntry {

@@ -14,8 +14,8 @@ export function seatAngles(count: number): number[] {
 const LANDSCAPE_RX = 47;
 const LANDSCAPE_RY = 44;
 /** 竖屏手机：窄高椭圆（座位整体缩小，见 PokerTable --seat-scale） */
-const PORTRAIT_RX = 36;
-const PORTRAIT_RY = 46.5;
+const PORTRAIT_RX = 30;
+const PORTRAIT_RY = 44;
 
 /** 是否使用竖屏牌桌（窄屏且竖向） */
 const isPortraitTable = ref(false);
