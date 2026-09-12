@@ -76,6 +76,13 @@ const isDealerDraw = computed(() => game.value?.phase === 'dealer_draw');
 
 const drawState = computed(() => game.value?.dealerDraw ?? null);
 const availableSet = computed(() => new Set(drawState.value?.available ?? []));
+/** 桌面摊开的盖牌总数：优先用服务端 spreadSize，缺失时回退为 available + draws 数量 */
+const spreadCount = computed(() => {
+  const dd = drawState.value;
+  if (!dd) return 0;
+  if (typeof dd.spreadSize === 'number') return dd.spreadSize;
+  return dd.available.length + dd.draws.length;
+});
 const myDrawn = computed(
   () => store.mySeat !== null && (drawState.value?.draws.some((d) => d.seatIndex === store.mySeat) ?? false),
 );
@@ -90,16 +97,17 @@ function registerSpreadEl(i: number, el: Element | ComponentPublicInstance | nul
   registerDrawCardEl(i, el instanceof HTMLElement ? el : null);
 }
 
-/** 摊开牌堆的弧形布局：第 i 张牌的位移与旋转 */
+/** 摊开牌堆的弧形布局：按容器宽度百分比均匀分布，永不超出桌面 */
 function spreadStyle(i: number) {
-  const total = drawState.value?.spreadSize ?? 11;
-  const pitch = portrait.value ? 6.2 : 10.5;
+  const total = spreadCount.value || 11;
   const center = (total - 1) / 2;
-  const norm = (i - center) / Math.max(1, center); // -1 ~ 1
-  const x = (i - center) * pitch;
-  const y = norm * norm * 24; // 两端上翘的弧线
+  const norm = total > 1 ? (i - center) / Math.max(1, center) : 0; // -1 ~ 1
+  // 半展开宽度占容器宽度的百分比：窄屏更紧、横屏更宽，且端点留出半个牌宽的余量
+  const halfPct = portrait.value ? 40 : 30;
+  const arc = portrait.value ? 18 : 24;
+  const y = norm * norm * arc; // 两端上翘的弧线
   const rot = norm * 6;
-  return { transform: `translate(calc(-50% + ${x}px), ${y}px) rotate(${rot}deg)`, zIndex: i + 1 };
+  return { left: `${(50 + norm * halfPct).toFixed(2)}%`, transform: `translate(-50%, ${y}px) rotate(${rot}deg)`, zIndex: i + 1 };
 }
 
 function pickCard(i: number) {
@@ -165,7 +173,7 @@ const drawTip = computed(() => {
     <!-- 抽牌定庄：摊开的一堆盖牌，玩家各自点击抽一张 -->
     <div v-if="isDealerDraw && drawState" class="draw-spread">
       <div
-        v-for="i in drawState.spreadSize"
+        v-for="i in spreadCount"
         :key="i - 1"
         :ref="(el) => registerSpreadEl(i - 1, el)"
         class="spread-card"
