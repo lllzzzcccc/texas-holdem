@@ -5,8 +5,8 @@ import { formatChips } from '../utils/chips';
 
 const props = defineProps<{
   open: boolean;
-  /** 模式：买入入座 / 补码 */
-  mode: 'buyin' | 'rebuy';
+  /** 模式：买入入座 / 补码 / 放置 AI */
+  mode: 'buyin' | 'rebuy' | 'bot';
 }>();
 const emit = defineEmits<{ confirm: [amount: number]; close: [] }>();
 
@@ -26,14 +26,28 @@ watch(
 
 const bbCount = computed(() => (amount.value / bb.value).toFixed(0));
 const presets = computed(() => [1000, 2000, 4000].filter((v) => v >= min.value && v <= max.value));
+
+const titleText = computed(() => {
+  if (props.mode === 'buyin') return '购买积分入座';
+  if (props.mode === 'bot') return '放置 AI 玩家';
+  return '补充积分';
+});
+const confirmText = computed(() => {
+  if (props.mode === 'buyin') return '确认入座';
+  if (props.mode === 'bot') return '确认放置';
+  return '确认补码';
+});
+const hintText = computed(() =>
+  props.mode === 'bot' ? 'AI 入座后由系统自动出牌' : '积分全部为虚拟积分，仅供游戏计分使用',
+);
 </script>
 
 <template>
   <transition name="fade">
     <div v-if="open" class="overlay" @click.self="emit('close')">
       <div class="card-panel dialog">
-        <h3>{{ mode === 'buyin' ? '购买积分入座' : '补充积分' }}</h3>
-        <p class="hint">积分全部为虚拟积分，仅供游戏计分使用</p>
+        <h3>{{ titleText }}</h3>
+        <p class="hint">{{ hintText }}</p>
 
         <div class="amount-big">{{ formatChips(amount) }}</div>
         <div class="bb-hint">= {{ bbCount }} 个大盲</div>
@@ -66,7 +80,7 @@ const presets = computed(() => [1000, 2000, 4000].filter((v) => v >= min.value &
         <div class="actions">
           <button class="ghost" @click="emit('close')">取消</button>
           <button class="ok" @click="emit('confirm', amount)">
-            {{ mode === 'buyin' ? '确认入座' : '确认补码' }}
+            {{ confirmText }}
           </button>
         </div>
       </div>

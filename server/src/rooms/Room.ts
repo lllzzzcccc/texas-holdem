@@ -11,11 +11,23 @@ import type {
   RoomState,
   SeatState,
 } from '@th/shared';
-import { DANMAKU_MAX_LEN, DANMAKU_STYLES, EMOJI_PRESETS, EV } from '@th/shared';
+import {
+  BOT_BLUFF_POT_MAX,
+  BOT_BLUFF_POT_MIN,
+  BOT_BLUFF_RATE_MAX,
+  BOT_BLUFF_RATE_MIN,
+  DANMAKU_MAX_LEN,
+  DANMAKU_STYLES,
+  EMOJI_PRESETS,
+  EV,
+} from '@th/shared';
 import { Deck, compareHighCard } from '../engine/deck.js';
 import { HandEngine, type EngineEvent } from '../engine/HandEngine.js';
 import { nextSeat } from '../engine/positions.js';
 import { config } from '../config.js';
+import { requestDecision } from '../ai/client.js';
+import { buildPrompt, type PromptContext } from '../ai/prompt.js';
+import type { BotDecision } from '../ai/types.js';
 
 export interface Player {
   id: string;
@@ -23,6 +35,12 @@ export interface Player {
   socketId: string | null;
   connected: boolean;
   joinedAt: number;
+  /** 是否为房主放置的 AI 玩家（socketId 恒为 null，由服务端代为行动） */
+  isBot: boolean;
+  /** AI 诈唬频率（0~1，仅 AI 有值，放置时由房主指定或随机） */
+  bluffRate?: number;
+  /** AI 诈唬注码占底池比例（0~1，仅 AI 有值） */
+  bluffPotPct?: number;
 }
 
 interface Seat {
@@ -37,6 +55,16 @@ function normalizeRoomPassword(pw: string | undefined | null): string | null {
   if (pw === undefined || pw === null || pw === '') return null;
   if (!/^\d{4}$/.test(pw)) throw new Error('房间密码需为 4 位数字');
   return pw;
+}
+
+const round2 = (v: number) => Math.round(v * 100) / 100;
+
+/** 随机生成一套 AI 诈唬风格（房主不可指定，创建时在合理区间内随机） */
+function randomBluffStyle(): { bluffRate: number; bluffPotPct: number } {
+  return {
+    bluffRate: round2(BOT_BLUFF_RATE_MIN + Math.random() * (BOT_BLUFF_RATE_MAX - BOT_BLUFF_RATE_MIN)),
+    bluffPotPct: round2(BOT_BLUFF_POT_MIN + Math.random() * (BOT_BLUFF_POT_MAX - BOT_BLUFF_POT_MIN)),
+  };
 }
 
 /** Room 对外输出（由 gateway 实现，桥接 socket.io） */
@@ -96,6 +124,8 @@ export class Room {
 
   private turnTimer: NodeJS.Timeout | null = null;
   private turnDeadline: number | null = null;
+  /** AI 玩家编号计数器（生成 playerId/nickname 用） */
+  private botSeq = 0;
   private nextHandTimer: NodeJS.Timeout | null = null;
   private handFinalized = false;
   private disconnectTimers = new Map<string, NodeJS.Timeout>();
@@ -222,6 +252,7 @@ export class Room {
       socketId,
       connected: true,
       joinedAt: Date.now(),
+      isBot: false,
     };
     this.players.set(player.id, player);
     this.emptySince = null;
@@ -234,7 +265,7 @@ export class Room {
     p.connected = false;
     p.socketId = null;
 
-    if (this.players.size > 0 && ![...this.players.values()].some((x) => x.connected)) {
+    if (this.players.size > 0 && ![...this.players.values()].some((x) => x.connected && !x.isBot)) {
       this.emptySince = Date.now();
     }
     // 房主掉线不立即易主：保留 60s 重连宽限，宽限到期未归（removePlayer）时再按加入顺序转移
@@ -289,7 +320,12 @@ export class Room {
       this.hooks.destroyRoom();
       return;
     }
-    if (![...this.players.values()].some((x) => x.connected)) this.emptySince = Date.now();
+    // 只剩 AI（没有任何真人，含观战者）：AI 不能当房主，直接销毁，不留悬空的房主
+    if (![...this.players.values()].some((p) => !p.isBot)) {
+      this.hooks.destroyRoom();
+      return;
+    }
+    if (![...this.players.values()].some((x) => x.connected && !x.isBot)) this.emptySince = Date.now();
     // 检查当前游戏是否还能继续，避免任何阶段卡死
     this.reconcilePlayability();
   }
@@ -310,10 +346,10 @@ export class Room {
     return target;
   }
 
-  /** 房主离开/被移除时：按加入顺序转移给下一位在线玩家 */
+  /** 房主离开/被移除时：按加入顺序转移给下一位在线玩家（AI 不接任房主） */
   private transferHost(): void {
     const next = [...this.players.values()]
-      .filter((p) => p.connected && p.id !== this.hostId)
+      .filter((p) => p.connected && !p.isBot && p.id !== this.hostId)
       .sort((a, b) => a.joinedAt - b.joinedAt)[0];
     if (next) this.hostId = next.id;
   }
@@ -389,6 +425,35 @@ export class Room {
     this.hooks.emitState();
   }
 
+  /** 房主在空座放置 AI 玩家并为其买入筹码（仅大厅阶段可用）；诈唬风格由服务端随机指定 */
+  addBot(playerId: string, seatIndex: number, buyIn: number): void {
+    if (playerId !== this.hostId) throw new Error('只有房主可以放置 AI 玩家');
+    if (this.status !== 'lobby') throw new Error('游戏已开始，只能观战');
+    if (!Number.isInteger(seatIndex) || seatIndex < 0 || seatIndex >= this.maxSeats) throw new Error('座位无效');
+    if (this.seats[seatIndex]) throw new Error('该座位已有玩家');
+    if (!Number.isInteger(buyIn) || buyIn < this.minBuyIn || buyIn > this.maxBuyIn) {
+      throw new Error(`买入需在 ${this.minBuyIn} ~ ${this.maxBuyIn} 之间`);
+    }
+    const seq = ++this.botSeq;
+    const botId = `bot-${seq}`;
+    const style = randomBluffStyle();
+    // AI 昵称不与真人重名（AI·1 与「AI·1」规范一致，忽略大小写比较不会误伤）
+    this.players.set(botId, {
+      id: botId,
+      nickname: `AI·${seq}`,
+      socketId: null,
+      connected: true,
+      joinedAt: Date.now(),
+      isBot: true,
+      ...style,
+    });
+    this.seats[seatIndex] = { seatIndex, playerId: botId, stack: buyIn };
+    console.log(
+      `[AI] 房主放置 AI 于座位${seatIndex}：${botId} 买入${buyIn}，随机诈唬频率=${style.bluffRate}，诈唬注码=${style.bluffPotPct}`,
+    );
+    this.hooks.emitState();
+  }
+
   leaveSeat(playerId: string): void {
     const seat = this.seatOfPlayer(playerId);
     if (seat === null) throw new Error('你不在座位上');
@@ -424,6 +489,15 @@ export class Room {
     if (this.turnTimeoutMs > 0) {
       this.drawDeadline = Date.now() + this.turnTimeoutMs;
       this.drawTimer = setTimeout(() => this.autoDrawMissing(), this.turnTimeoutMs);
+    }
+    // 房主放置的 AI 自动代抽（避免卡在抽牌阶段等 AI 点击）
+    for (const s of seated) {
+      const p = this.players.get(s.playerId);
+      if (!p?.isBot) continue;
+      const dd = this.dealerDraw!;
+      const available = dd.pool.map((_, i) => i).filter((i) => !dd.taken.has(i));
+      if (available.length === 0) break;
+      this.drawCard(p.id, available[randomInt(available.length)]);
     }
     this.hooks.emitState();
   }
@@ -649,6 +723,7 @@ export class Room {
     }
     this.setTurnTimer();
     this.sendYourTurn();
+    this.scheduleBotTurn();
   }
 
   private finalizeHand(): void {
@@ -673,10 +748,25 @@ export class Room {
     for (const pid of [...this.forfeited]) this.removePlayer(pid);
     this.reconcilingHand = false;
 
-    // 输光的在座玩家（stack 归零且仍在线），下一手前需决定「买入继续 / 离开」
+    // 输光的 AI：自动离座并移除（bot 无法做「补码/离开」抉择，不进补码决策）
+    for (let i = 0; i < this.seats.length; i++) {
+      const s = this.seats[i];
+      if (!s || s.stack !== 0) continue;
+      if (!this.players.get(s.playerId)?.isBot) continue;
+      this.seats[i] = null;
+      this.players.delete(s.playerId);
+    }
+
+    // 输光的在座玩家（stack 归零且仍在线、且非 AI），下一手前需决定「买入继续 / 离开」
     const busted = this.seats
       .map((s, i) => ({ s, i }))
-      .filter(({ s }) => s !== null && s.stack === 0 && this.players.get(s.playerId)?.connected === true)
+      .filter(
+        ({ s }) =>
+          s !== null &&
+          s.stack === 0 &&
+          this.players.get(s.playerId)?.connected === true &&
+          !(this.players.get(s.playerId)?.isBot ?? false),
+      )
       .map(({ i }) => i);
 
     if (this.maxHands > 0 && this.handNumber >= this.maxHands) {
@@ -795,6 +885,10 @@ export class Room {
   private setTurnTimer(): void {
     this.clearTurnTimer();
     if (!this.engine || this.engine.actingSeat === null) return;
+    // AI 玩家：不挂真人倒计时（AI 有自己的请求超时 + 兜底），避免 onTurnTimeout 抢跑
+    const actingSeat = this.engine.actingSeat;
+    const acting = this.seats[actingSeat];
+    if (acting && this.players.get(acting.playerId)?.isBot) return;
     const actingOnline = this.actingPlayerOnline();
     // 离线/已离开的玩家：轮到即快速自动弃牌（不限时模式下同样适用，避免断线卡住整局）
     if (!actingOnline) {
@@ -850,6 +944,139 @@ export class Room {
     this.hooks.emitToPlayer(p.id, { yourTurn: legal });
   }
 
+  // ---------- AI 玩家行动 ----------
+
+  /** 轮到 AI 时异步发起决策（不阻塞 socket 事件循环） */
+  private scheduleBotTurn(): void {
+    if (!this.engine || this.engine.isHandEnded) return;
+    const seat = this.engine.actingSeat;
+    if (seat === null) return;
+    const seatObj = this.seats[seat];
+    if (!seatObj) return;
+    const p = this.players.get(seatObj.playerId);
+    if (!p?.isBot) return;
+    void this.runBotAction(seat, seatObj.playerId);
+  }
+
+  /** 组装 AI 决策上下文（只含自己底牌 + 公共信息，不泄露他人底牌） */
+  private buildBotContext(seat: number, playerId: string): PromptContext {
+    const engine = this.engine!;
+    const pub = engine.toPublicState();
+    const seats = engine.toSeatStates(playerId).map((s) => ({
+      seatIndex: s.seatIndex,
+      nickname: s.nickname,
+      stack: s.stack,
+      bet: s.bet,
+      committed: s.committed,
+      hasFolded: s.hasFolded,
+      isAllIn: s.isAllIn,
+      isDealer: s.isDealer,
+      lastAction: s.lastAction,
+    }));
+    return {
+      handNumber: pub.handNumber,
+      smallBlind: pub.smallBlind,
+      bigBlind: pub.bigBlind,
+      phase: pub.phase,
+      board: pub.board,
+      potTotal: pub.potTotal,
+      currentBet: pub.currentBet,
+      dealerSeat: pub.dealerSeat,
+      mySeat: seat,
+      holeCards: engine.getHoleCards(seat),
+      seats,
+      legal: engine.legalActions(seat),
+    };
+  }
+
+  /** 执行 AI 行动：延迟 → 请求模型 → 兜底/合法性纠正 → 复用真人行动路径 */
+  private async runBotAction(seat: number, playerId: string): Promise<void> {
+    // 观感自然的随机延迟
+    const { turnDelayMinMs, turnDelayMaxMs } = config.ai;
+    const delay = randomInt(Math.min(turnDelayMinMs, turnDelayMaxMs), Math.max(turnDelayMinMs, turnDelayMaxMs) + 1);
+    await new Promise((r) => setTimeout(r, delay));
+
+    if (!this.engine || this.engine.isHandEnded || this.engine.actingSeat !== seat) return;
+
+    const ctx = this.buildBotContext(seat, playerId);
+    console.log(
+      `[AI] 座位${seat} 开始决策 phase=${ctx.phase} board=[${ctx.board.join(',')}] 底池=${ctx.potTotal} ` +
+        `底牌=[${ctx.holeCards.join(',')}] canCheck=${ctx.legal.canCheck} callAmount=${ctx.legal.callAmount} ` +
+        `canRaise=${ctx.legal.canRaise} raiseTo=${ctx.legal.minRaiseTo}~${ctx.legal.maxRaiseTo}`,
+    );
+
+    let decision: BotDecision | null = null;
+    try {
+      const prompt = buildPrompt(ctx);
+      console.log(`[AI] 座位${seat} 提示词(user):\n${prompt.user}`);
+      decision = await requestDecision(prompt, config.ai);
+    } catch (e) {
+      console.warn(`[AI] 座位${seat} 决策失败，走兜底（过牌/弃牌）: ${e instanceof Error ? e.message : e}`);
+      decision = null;
+    }
+
+    // 等待模型返回期间牌局可能已变化，行动前重新校验
+    if (!this.engine || this.engine.isHandEnded || this.engine.actingSeat !== seat) return;
+    const legal = this.engine.legalActions(seat);
+
+    let action: 'fold' | 'check' | 'call' | 'raise';
+    let amount: number | undefined;
+    if (decision) {
+      switch (decision.action) {
+        case 'check':
+          action = legal.canCheck ? 'check' : 'fold';
+          break;
+        case 'call':
+          action = legal.canCheck ? 'check' : 'call';
+          break;
+        case 'raise': {
+          if (!legal.canRaise) {
+            action = legal.canCheck ? 'check' : 'fold';
+          } else {
+            const raw = decision.amount ?? legal.minRaiseTo;
+            action = 'raise';
+            amount = Math.min(Math.max(raw, legal.minRaiseTo), legal.maxRaiseTo);
+          }
+          break;
+        }
+        default:
+          action = 'fold';
+      }
+    } else {
+      action = legal.canCheck ? 'check' : 'fold';
+    }
+
+    // 诈唬层：模型偏向保守（尤其爱「过牌」弃打），这里以一定概率把被动过牌转成主动下注诈唬，
+    // 让 AI 更有侵略性、更难被读。只在对手少（≤2）、有下注能力时触发。
+    // 概率与注码用该 AI 自己的风格（房主放置时指定或随机），缺省回落到全局配置。
+    const botStyle = this.players.get(playerId);
+    const bluffRate = botStyle?.bluffRate ?? config.ai.bluffRate;
+    const bluffPotPct = botStyle?.bluffPotPct ?? config.ai.bluffPotPct;
+    const activeOpponents = ctx.seats.filter((s) => s.seatIndex !== seat && !s.hasFolded && !s.isAllIn).length;
+    if (action === 'check' && legal.canRaise && activeOpponents <= 2 && Math.random() < bluffRate) {
+      const bluffTo = Math.max(legal.minRaiseTo, Math.min(legal.maxRaiseTo, Math.round(ctx.potTotal * bluffPotPct)));
+      action = 'raise';
+      amount = bluffTo;
+      console.log(
+        `[AI] 座位${seat} 诈唬：把「过牌」改为加注到 ${bluffTo}（对手数=${activeOpponents}，底池=${ctx.potTotal}，风格=${bluffRate}/${bluffPotPct}）`,
+      );
+    }
+
+    console.log(`[AI] 座位${seat} 最终行动: ${action}${amount !== undefined ? ` 加注到 ${amount}` : ''}`);
+    try {
+      this.processEvents(this.engine.act(seat, action, amount));
+    } catch (e) {
+      // 兜底：能过牌就过牌，否则弃牌
+      console.warn(`[AI] act 失败，走兜底: ${e instanceof Error ? e.message : e}`);
+      try {
+        const l = this.engine.legalActions(seat);
+        this.processEvents(this.engine.act(seat, l.canCheck ? 'check' : 'fold'));
+      } catch {
+        /* 手牌可能已结束 */
+      }
+    }
+  }
+
   // ---------- 工具 ----------
 
   private seatOfPlayer(playerId: string): number | null {
@@ -883,7 +1110,14 @@ export class Room {
       if (!seat) return null;
       const p = this.players.get(seat.playerId);
       const es = engineSeats?.get(i);
-      if (es) return { ...es, connected: p?.connected ?? false };
+      if (es) {
+        return {
+          ...es,
+          connected: p?.connected ?? false,
+          isBot: p?.isBot ?? false,
+          ...(p?.isBot ? { bluffRate: p.bluffRate, bluffPotPct: p.bluffPotPct } : {}),
+        };
+      }
       return {
         seatIndex: i,
         playerId: seat.playerId,
@@ -898,6 +1132,8 @@ export class Room {
         hasActed: false,
         isDealer: this.status === 'playing' && i === this.dealerSeat,
         lastAction: null,
+        isBot: p?.isBot ?? false,
+        ...(p?.isBot ? { bluffRate: p.bluffRate, bluffPotPct: p.bluffPotPct } : {}),
       };
     });
 

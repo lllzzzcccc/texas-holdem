@@ -1,3 +1,4 @@
+import './env.js';
 import { createServer } from 'node:http';
 import { existsSync } from 'node:fs';
 import path from 'node:path';

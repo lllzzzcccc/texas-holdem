@@ -10,6 +10,7 @@ import PokerTable from '../components/table/PokerTable.vue';
 import PlayingCard from '../components/table/PlayingCard.vue';
 import BetPanel from '../components/table/BetPanel.vue';
 import BuyInDialog from '../components/BuyInDialog.vue';
+import SeatActionMenu from '../components/SeatActionMenu.vue';
 import QrInvite from '../components/QrInvite.vue';
 import HandSummary from '../components/HandSummary.vue';
 import ActionLog from '../components/ActionLog.vue';
@@ -27,8 +28,9 @@ const store = useRoomStore();
 
 const nickname = ref(savedNickname());
 const buyInOpen = ref(false);
-const buyInMode = ref<'buyin' | 'rebuy'>('buyin');
+const buyInMode = ref<'buyin' | 'rebuy' | 'bot'>('buyin');
 const chosenPos = ref(0);
+const seatMenuOpen = ref(false);
 const qrOpen = ref(false);
 const settingsOpen = ref(false);
 const dissolveOpen = ref(false);
@@ -326,7 +328,24 @@ async function joinWithNickname() {
 
 function onSit(pos: number) {
   chosenPos.value = pos;
+  // 房主：弹出「入座 / 放置 AI」选择；普通玩家：直接买入入座
+  if (store.isHost) {
+    seatMenuOpen.value = true;
+  } else {
+    buyInMode.value = 'buyin';
+    buyInOpen.value = true;
+  }
+}
+
+function onChooseBuyin() {
+  seatMenuOpen.value = false;
   buyInMode.value = 'buyin';
+  buyInOpen.value = true;
+}
+
+function onChooseBot() {
+  seatMenuOpen.value = false;
+  buyInMode.value = 'bot';
   buyInOpen.value = true;
 }
 
@@ -334,6 +353,9 @@ async function confirmBuyIn(amount: number) {
   if (buyInMode.value === 'buyin') {
     // 展示位置即实际座位号（不旋转，坐哪就是哪）
     const ok = await store.takeSeat(chosenPos.value, amount);
+    if (ok) buyInOpen.value = false;
+  } else if (buyInMode.value === 'bot') {
+    const ok = await store.addBot(chosenPos.value, amount);
     if (ok) buyInOpen.value = false;
   } else {
     await store.rebuy(amount);
@@ -420,10 +442,10 @@ function confirmLeave() {
         <button
           class="member-count"
           :class="{ active: membersOpen }"
-          :title="`在座 ${store.seatedCount} 人 · 观战 ${store.room?.spectators.length ?? 0} 人`"
+          :title="`在座 ${store.humanSeatedCount} 人 · 观战 ${store.room?.spectators.length ?? 0} 人`"
           @click="membersOpen = !membersOpen"
         >
-          👥 {{ store.seatedCount + (store.room?.spectators.length ?? 0) }}
+          👥 {{ store.humanSeatedCount + (store.room?.spectators.length ?? 0) }}
         </button>
         <span v-if="store.room?.game?.handNumber" class="hand-no">
           第 {{ store.room.game.handNumber }}{{ store.room.maxHands > 0 ? `/${store.room.maxHands}` : '' }} 手
@@ -602,6 +624,13 @@ function confirmLeave() {
 
     <!-- 弹层 -->
     <BuyInDialog :open="buyInOpen" :mode="buyInMode" @confirm="confirmBuyIn" @close="buyInOpen = false" />
+    <SeatActionMenu
+      :open="seatMenuOpen"
+      :seat-index="chosenPos"
+      @buyin="onChooseBuyin"
+      @bot="onChooseBot"
+      @close="seatMenuOpen = false"
+    />
     <QrInvite :open="qrOpen" :url="store.inviteUrl" :code="store.room?.code ?? ''" @close="qrOpen = false" />
     <RoomSettingsDialog :open="settingsOpen" @close="settingsOpen = false" />
     <RoomInfoDialog :open="infoOpen" @close="infoOpen = false" />

@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@th/shared": "*",
+    "dotenv": "^17.4.2",
     "express": "^4.21.2",
     "pokersolver": "^2.1.4",
     "socket.io": "^4.8.1",

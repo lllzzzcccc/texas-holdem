@@ -182,6 +182,14 @@ export function attachGateway(io: IO, manager: RoomManager): void {
     );
 
     socket.on(
+      EV.LobbyAddBot,
+      wrap((p: { seatIndex: number; buyIn: number }, cb: (r: { ok: true } | ApiError) => void) => {
+        roomOf().addBot(session.playerId, p.seatIndex, p.buyIn);
+        cb({ ok: true });
+      }),
+    );
+
+    socket.on(
       EV.LobbyLeaveSeat,
       wrap((_: Record<string, never>, cb?: (r: { ok: true } | ApiError) => void) => {
         roomOf().leaveSeat(session.playerId);

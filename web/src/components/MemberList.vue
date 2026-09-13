@@ -12,8 +12,9 @@ const kickTarget = ref<{ id: string; name: string } | null>(null);
 
 type Row = { id: string; name: string; tag: string };
 const rows = computed<Row[]>(() => {
+  // AI 玩家不算房间成员，不出现在成员列表
   const seated: Row[] = (store.room?.seats ?? [])
-    .filter((s) => s !== null)
+    .filter((s) => s !== null && !s.isBot)
     .map((s) => ({ id: s!.playerId, name: s!.nickname, tag: `${s!.seatIndex + 1} 号位` }));
   const specs: Row[] = (store.room?.spectators ?? []).map((s) => ({
     id: s.playerId,

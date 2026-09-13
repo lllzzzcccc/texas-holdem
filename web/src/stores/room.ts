@@ -102,6 +102,10 @@ export const useRoomStore = defineStore('room', {
     seatedCount(state): number {
       return state.room?.seats.filter(Boolean).length ?? 0;
     },
+    /** 在座真人数量（不含 AI） */
+    humanSeatedCount(state): number {
+      return state.room?.seats.filter((s) => s !== null && !s.isBot).length ?? 0;
+    },
     /** 是否有输光玩家正在补码决策（全员等待其抉择） */
     pendingRebuy(state): boolean {
       return !!state.room?.rebuyDecision;
@@ -326,6 +330,19 @@ export const useRoomStore = defineStore('room', {
 
     async takeSeat(seatIndex: number, buyIn: number): Promise<boolean> {
       const r = await emitAck<{ seatIndex: number; buyIn: number }, { ok: true } | ApiErr>(EV.LobbyTakeSeat, {
+        seatIndex,
+        buyIn,
+      });
+      if (isErr(r)) {
+        this.toast(r.message);
+        return false;
+      }
+      return true;
+    },
+
+    /** 房主在空座放置 AI 玩家并为其买入筹码（诈唬风格由服务端随机指定） */
+    async addBot(seatIndex: number, buyIn: number): Promise<boolean> {
+      const r = await emitAck<{ seatIndex: number; buyIn: number }, { ok: true } | ApiErr>(EV.LobbyAddBot, {
         seatIndex,
         buyIn,
       });

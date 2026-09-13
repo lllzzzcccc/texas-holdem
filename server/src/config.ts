@@ -15,4 +15,19 @@ export const config = {
   dealerDrawPauseMs: Number(process.env.DEALER_DRAW_PAUSE_MS ?? 2200),
   /** 输光玩家补码/离席决策时限（超时自动离席） */
   rebuyDecisionMs: Number(process.env.REBUY_DECISION_MS ?? 30000),
+  /** AI 玩家（房主放置）配置：Anthropic Messages API（用 AI_* 前缀，避免与 Claude Code 的 ANTHROPIC_* 环境变量冲突） */
+  ai: {
+    apiKey: process.env.AI_API_KEY ?? '',
+    model: process.env.AI_MODEL ?? 'claude-sonnet-5',
+    baseUrl: process.env.AI_BASE_URL ?? 'https://api.anthropic.com',
+    /** 单次决策请求超时（ms） */
+    timeoutMs: Number(process.env.AI_TIMEOUT_MS ?? 20_000),
+    /** AI 行动前的随机延迟区间（ms），观感更自然 */
+    turnDelayMinMs: Number(process.env.AI_TURN_DELAY_MIN_MS ?? 800),
+    turnDelayMaxMs: Number(process.env.AI_TURN_DELAY_MAX_MS ?? 1500),
+    /** 诈唬注入概率：模型选择「过牌」且牌面可下注时，转成主动下注诈唬的比例（0~1） */
+    bluffRate: Number(process.env.AI_BLUFF_RATE ?? 0.15),
+    /** 诈唬下注规模：占当前底池的比例（0~1，默认 0.6 = 六成池） */
+    bluffPotPct: Number(process.env.AI_BLUFF_POT_PCT ?? 0.6),
+  },
 } as const;

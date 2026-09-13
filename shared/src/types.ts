@@ -38,6 +38,12 @@ export interface SeatState {
   isDealer: boolean;
   /** 最近一次动作展示（如 "跟注 200"），由前端渲染气泡 */
   lastAction: string | null;
+  /** 是否为 AI 玩家（由房主放置，服务端代为行动） */
+  isBot: boolean;
+  /** AI 诈唬风格：诈唬频率 0~1（仅 AI 座位有值） */
+  bluffRate?: number;
+  /** AI 诈唬风格：诈唬注码占底池比例 0~1（仅 AI 座位有值） */
+  bluffPotPct?: number;
 }
 
 export interface PotState {
@@ -205,6 +211,7 @@ export const EV = {
   RoomKick: 'room:kick',
   LobbyTakeSeat: 'lobby:takeSeat',
   LobbyLeaveSeat: 'lobby:leaveSeat',
+  LobbyAddBot: 'lobby:addBot',
   GameStart: 'game:start',
   GameStop: 'game:stop',
   GameAction: 'game:action',
@@ -239,6 +246,12 @@ export type DanmakuStyle = (typeof DANMAKU_STYLES)[number];
 
 /** 弹幕正文最大长度（字符） */
 export const DANMAKU_MAX_LEN = 40;
+
+/** AI 诈唬风格的合理区间（服务端创建 AI 时在此范围内随机指定，房主不可调整） */
+export const BOT_BLUFF_RATE_MIN = 0.05;
+export const BOT_BLUFF_RATE_MAX = 0.4;
+export const BOT_BLUFF_POT_MIN = 0.4;
+export const BOT_BLUFF_POT_MAX = 0.9;
 
 /** 表情投掷广播载荷（S→C） */
 export interface EmojiThrowPayload {
@@ -300,6 +313,8 @@ export interface ClientToServerEvents {
   [EV.RoomKick]: (p: { playerId: string }, cb: (r: { ok: true } | ApiError) => void) => void;
   [EV.LobbyTakeSeat]: (p: { seatIndex: number; buyIn: number }, cb: (r: { ok: true } | ApiError) => void) => void;
   [EV.LobbyLeaveSeat]: (p: Record<string, never>, cb?: (r: { ok: true } | ApiError) => void) => void;
+  /** 房主在空座放置 AI 玩家并为其买入筹码（诈唬风格由服务端在合理区间内随机指定） */
+  [EV.LobbyAddBot]: (p: { seatIndex: number; buyIn: number }, cb: (r: { ok: true } | ApiError) => void) => void;
   [EV.GameStart]: (p: Record<string, never>, cb: (r: { ok: true } | ApiError) => void) => void;
   [EV.GameStop]: (p: Record<string, never>, cb: (r: { ok: true } | ApiError) => void) => void;
   [EV.GameAction]: (

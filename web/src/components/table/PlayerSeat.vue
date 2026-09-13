@@ -31,7 +31,10 @@ const acting = computed(
   () => !!props.seat && store.room?.game?.actingSeat === props.seat.seatIndex,
 );
 const canSit = computed(
-  () => !props.seat && store.room?.status === 'lobby' && store.mySeat === null,
+  () =>
+    !props.seat &&
+    store.room?.status === 'lobby' &&
+    (store.mySeat === null || store.isHost),
 );
 
 const inward = computed(() => inwardVector(props.displayPos, store.room?.maxSeats ?? 9));
@@ -53,6 +56,14 @@ const drawCardFaceUp = computed(() => props.drawRevealed && !!props.drawCard);
 
 const initials = computed(() => props.seat?.nickname?.slice(0, 1) ?? '');
 
+/** AI 诈唬风格提示（仅 AI 座位有值），悬停 🤖 徽标可见 */
+const botStyleHint = computed(() => {
+  const s = props.seat;
+  if (!s?.isBot) return '';
+  if (s.bluffRate == null || s.bluffPotPct == null) return 'AI 玩家';
+  return `诈唬 ${Math.round(s.bluffRate * 100)}% · 注码 ${Math.round(s.bluffPotPct * 100)}% 池`;
+});
+
 const isWinner = computed(
   () =>
     !!props.seat &&
@@ -72,9 +83,15 @@ function bubbleClass(action: string): string {
 const emojis = EMOJI_PRESETS;
 const pickerOpen = computed(() => !!props.seat && store.emojiTargetSeat === props.seat.seatIndex);
 
-/** 点击头像：打开/关闭表情选择盘（仅入座玩家可发起投掷，服务端也会校验） */
+/** 房主点击 AI 头像后是否展开「踢出」按钮 */
+const kickOpen = ref(false);
+
+/** 点击头像：房主点 AI 头像同时弹出「踢出」按钮与表情盘；其余情况只切表情盘 */
 function onAvatarClick() {
   if (!props.seat) return;
+  if (props.seat.isBot && store.isHost) {
+    kickOpen.value = !kickOpen.value;
+  }
   store.toggleEmojiPicker(props.seat.seatIndex);
 }
 
@@ -82,6 +99,30 @@ function pickEmoji(emoji: string) {
   if (!props.seat) return;
   store.throwEmoji(props.seat.seatIndex, emoji);
 }
+
+/** 房主移出 AI 玩家（复用踢人通道，服务端对手牌进行中的 AI 会拒绝） */
+function kickBot() {
+  if (!props.seat) return;
+  kickOpen.value = false;
+  store.kickPlayer(props.seat.playerId);
+}
+
+// 「踢出」按钮展开后：点击座位以外的任意地方自动收起
+let kickOutsideHandler: ((e: MouseEvent) => void) | null = null;
+watch(kickOpen, (open) => {
+  if (open) {
+    kickOutsideHandler = (e: MouseEvent) => {
+      const el = wrapper.value;
+      if (!el) return;
+      if (el.contains(e.target as Node)) return;
+      kickOpen.value = false;
+    };
+    document.addEventListener('mousedown', kickOutsideHandler);
+  } else if (kickOutsideHandler) {
+    document.removeEventListener('mousedown', kickOutsideHandler);
+    kickOutsideHandler = null;
+  }
+});
 
 // 表情面板打开时：点击面板/头像以外的任意地方自动收起
 let pickerOutsideHandler: ((e: MouseEvent) => void) | null = null;
@@ -101,6 +142,7 @@ watch(pickerOpen, (open) => {
 });
 onBeforeUnmount(() => {
   if (pickerOutsideHandler) document.removeEventListener('mousedown', pickerOutsideHandler);
+  if (kickOutsideHandler) document.removeEventListener('mousedown', kickOutsideHandler);
 });
 </script>
 
@@ -125,6 +167,16 @@ onBeforeUnmount(() => {
           <div v-if="seat.isDealer" class="dealer-btn">D</div>
         </div>
 
+        <!-- 房主点击 AI 头像后，在其头像上方出现「踢出」按钮；作为头像的兄弟节点，避免头像 hover 缩放牵动按钮 -->
+        <button
+          v-if="seat.isBot && store.isHost && kickOpen"
+          class="bot-kick"
+          title="将 AI 移出房间"
+          @click.stop="kickBot"
+        >
+          踢出
+        </button>
+
         <!-- 表情选择盘：环绕头像上方展开 -->
         <transition name="pop">
           <div v-if="pickerOpen" class="emoji-picker-wrap" :class="{ 'open-right': onLeft }">
@@ -139,6 +191,7 @@ onBeforeUnmount(() => {
           <div class="nick-line">
             <span class="nick">{{ seat.nickname }}</span>
             <span v-if="isMe" class="me-tag">我</span>
+            <span v-if="seat.isBot" class="bot-tag" :title="botStyleHint">🤖</span>
           </div>
           <div class="stack">
             <template v-if="seat.stack > 0">{{ formatChips(seat.stack) }}</template>
@@ -239,6 +292,17 @@ onBeforeUnmount(() => {
   vertical-align: middle;
   line-height: 1.3;
 }
+.bot-tag {
+  display: inline-block;
+  background: linear-gradient(180deg, #b583f2, #7c4dcc);
+  font-size: 10px;
+  font-weight: 800;
+  border-radius: 6px;
+  padding: 0 4px;
+  margin-left: 4px;
+  vertical-align: middle;
+  line-height: 1.3;
+}
 
 .avatar {
   width: 56px;
@@ -278,6 +342,37 @@ onBeforeUnmount(() => {
 .avatar.winner {
   border-color: #ffd700;
   box-shadow: 0 0 24px 6px rgba(255, 215, 0, 0.75);
+}
+
+/* 房主点击 AI 头像后，在其头像上方出现的小号「踢出」按钮（低饱和中性色） */
+.bot-kick {
+  position: absolute;
+  top: -26px;
+  left: 50%;
+  /* 用 translateX(-50%) 做水平居中；全局 button:hover 会把 transform 改成 translateY(-1px)，
+     从而丢掉居中导致按钮向侧面位移，故在 hover/active 里用 !important 强制保留居中 */
+  transform: translateX(-50%);
+  border-radius: 999px;
+  padding: 1px 8px;
+  background: rgba(43, 49, 56, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  color: #c9cfd6;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+  z-index: 7;
+  /* 覆盖全局 button 的 transform 过渡：只对背景/文字做过渡，杜绝位移动画 */
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
+}
+.bot-kick:hover,
+.bot-kick:active {
+  transform: translateX(-50%) !important;
+  background: rgba(58, 66, 74, 0.82);
+  color: #fff;
 }
 
 /* ---------- 表情选择盘（头像左侧展开，避开上方底牌区与右侧气泡区） ---------- */
