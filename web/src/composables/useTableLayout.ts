@@ -10,12 +10,25 @@ export function seatAngles(count: number): number[] {
   return Array.from({ length: count }, (_, i) => (90 + i * step) % 360);
 }
 
-/** 横屏（桌面/手机横屏）：宽椭圆 */
-const LANDSCAPE_RX = 47;
-const LANDSCAPE_RY = 44;
-/** 竖屏手机：窄高椭圆（座位整体缩小，见 PokerTable --seat-scale） */
-const PORTRAIT_RX = 30;
-const PORTRAIT_RY = 44;
+/**
+ * 座位中心贴合木纹外轨「边缘」：外轨椭圆（rail）在牌桌盒中的百分比半轴。
+ *
+ * 横屏：SVG viewBox 1000×520 铺进 aspect-ratio 1000/560 的盒，
+ *   preserveAspectRatio="none" 使纵向拉伸 560/520，故
+ *   rx = 485/1000 = 48.5%，ry = 245/520 = 47.115%（以盒高度计）。
+ * 竖屏：viewBox 620×1000 与盒 620/1000 等比例，无拉伸，
+ *   rx = 300/620 = 48.387%，ry = 480/1000 = 48%。
+ */
+const LANDSCAPE_RX = 48.5;
+const LANDSCAPE_RY = 47.115;
+/**
+ * 竖屏手机：窄高椭圆（座位整体缩小，见 PokerTable --seat-scale）。
+ * rx 取 44% 而非外轨半轴 48.387%：把左右两侧座位向内收一点，让头像上的
+ * D 标记 / ALL-IN 角标 / 离线圆点等 tab 不再越出屏幕或贴边。
+ * （44% × 620 = 272.8px，正好落在内轨 railInner.rx = 272 上，视觉仍贴合桌面。）
+ */
+const PORTRAIT_RX = 44;
+const PORTRAIT_RY = 48;
 
 /** 是否使用竖屏牌桌（窄屏且竖向） */
 const isPortraitTable = ref(false);

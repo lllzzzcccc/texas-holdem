@@ -1,17 +1,20 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { EV } from '@th/shared';
 import { useRoomStore } from '../stores/room';
 import { savedNickname, savedPlayerId, socket } from '../socket';
 import { setSoundEnabled, soundEnabled } from '../utils/sound';
+import gsap from 'gsap';
 import PokerTable from '../components/table/PokerTable.vue';
+import PlayingCard from '../components/table/PlayingCard.vue';
 import BetPanel from '../components/table/BetPanel.vue';
 import BuyInDialog from '../components/BuyInDialog.vue';
 import QrInvite from '../components/QrInvite.vue';
 import HandSummary from '../components/HandSummary.vue';
 import ActionLog from '../components/ActionLog.vue';
 import RoomSettingsDialog from '../components/RoomSettingsDialog.vue';
+import RoomInfoDialog from '../components/RoomInfoDialog.vue';
 import ConfirmDialog from '../components/ConfirmDialog.vue';
 import DanmakuLayer from '../components/DanmakuLayer.vue';
 import DanmakuInput from '../components/DanmakuInput.vue';
@@ -29,10 +32,13 @@ const chosenPos = ref(0);
 const qrOpen = ref(false);
 const settingsOpen = ref(false);
 const dissolveOpen = ref(false);
+const leaveOpen = ref(false);
 const logOpen = ref(window.innerWidth > 1100); // 宽屏默认展开记录侧栏
 const danmakuOpen = ref(false);
 const membersOpen = ref(false);
 const menuOpen = ref(false);
+const infoOpen = ref(false);
+const copied = ref(false);
 const soundOn = ref(soundEnabled());
 
 // 加入门槛：设了密码的房间在首次加入失败后展示密码输入框
@@ -74,14 +80,218 @@ function toggleSound() {
   setSoundEnabled(soundOn.value);
 }
 
+/** 复制房间号到剪贴板（带非安全上下文降级） */
+async function copyCode() {
+  const code = store.room?.code;
+  if (!code) return;
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(code);
+    } else {
+      const ta = document.createElement('textarea');
+      ta.value = code;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+    }
+    copied.value = true;
+    setTimeout(() => (copied.value = false), 1600);
+  } catch {
+    store.toast('复制失败，请手动复制');
+  }
+}
+
 const joined = computed(() => store.joined);
 const lobby = computed(() => store.room?.status === 'lobby');
 const playing = computed(() => store.room?.status === 'playing');
 const actionOpen = computed(() => !!store.yourTurn);
 
+/** 下注街阶段集合：仅这些阶段本人会需要翻看自己的底牌 */
+const CARD_VIEW_PHASES = new Set(['preflop', 'flop', 'turn', 'river']);
+/** 是否显示左下角「看牌」按钮：本人在当前手牌中、未弃牌、还持有底牌 */
+const canViewCards = computed(() => {
+  const g = store.room?.game;
+  const mySeat = store.mySeat;
+  if (!g || store.room?.status !== 'playing' || mySeat === null) return false;
+  if (!CARD_VIEW_PHASES.has(g.phase)) return false;
+  const seat = store.room.seats[mySeat];
+  return !!seat && !seat.hasFolded && store.holeCards.length > 0;
+});
+
+const peekFab = ref<HTMLElement | null>(null);
+const danmakuFab = ref<HTMLElement | null>(null);
+const cardOverlay = ref<HTMLElement | null>(null);
+
+/**
+ * 底部有操作栏打开时（加注操作栏、弹幕输入栏等），若面板的水平范围与两侧悬浮图标
+ * （左下「看牌」、右下「弹幕」）重叠，就把图标抬高到面板上方，避免遮挡。
+ * 桌面宽屏下面板居中、够不到两侧图标，自然不抬。
+ */
+const peekLift = ref(0);
+const danmakuLift = ref(0);
+
+let panelResizeObserver: ResizeObserver | null = null;
+
+/** 观察当前打开底部面板的尺寸变化（如加注子面板展开变高），实时重算抬升量 */
+function watchPanelSizes() {
+  if (typeof ResizeObserver === 'undefined') return;
+  panelResizeObserver?.disconnect();
+  const els = ['.bet-panel', '.danmaku-panel']
+    .map((s) => document.querySelector<HTMLElement>(s))
+    .filter((e): e is HTMLElement => !!e);
+  if (els.length) {
+    panelResizeObserver = new ResizeObserver(() => refreshFabLifts());
+    els.forEach((e) => panelResizeObserver!.observe(e));
+  }
+}
+
+/** 当前打开、可能遮挡底部悬浮按钮的操作板 */
+function openPanelSelectors(): string[] {
+  const panels: string[] = [];
+  if (store.yourTurn) panels.push('.bet-panel');
+  if (danmakuOpen.value) panels.push('.danmaku-panel');
+  return panels;
+}
+
+/** 计算某悬浮按钮被底部操作板遮挡时需上移的距离（无遮挡为 0） */
+function liftFor(icon: HTMLElement | null): number {
+  let lift = 0;
+  if (!icon) return 0;
+  const ir = icon.getBoundingClientRect();
+  for (const sel of openPanelSelectors()) {
+    const p = document.querySelector<HTMLElement>(sel);
+    if (!p) continue;
+    const r = p.getBoundingClientRect();
+    if (!r.height) continue;
+    // 水平方向重叠才需要抬高（面板可能居中，够不到两侧图标）
+    if (r.left < ir.right && r.right > ir.left) {
+      lift = Math.max(lift, window.innerHeight - r.top + 8);
+    }
+  }
+  return lift;
+}
+
+function refreshFabLifts() {
+  peekLift.value = liftFor(peekFab.value);
+  danmakuLift.value = liftFor(danmakuFab.value);
+}
+
+const peekStyle = computed(() => (peekLift.value > 0 ? { bottom: `${peekLift.value}px` } : {}));
+const danmakuStyle = computed(() => (danmakuLift.value > 0 ? { bottom: `${danmakuLift.value}px` } : {}));
+
+/** 面板出现/消失或窗口尺寸变化时刷新；面板有 slide 入场动画，再延迟校正一次 */
+function scheduleFabLifts() {
+  refreshFabLifts();
+  watchPanelSizes();
+  window.setTimeout(refreshFabLifts, 300);
+}
+
+watch(
+  () => [!!store.yourTurn, danmakuOpen.value] as const,
+  () => scheduleFabLifts(),
+  { flush: 'post' }, // 等 DOM 更新后再测量，确保面板已渲染就位
+);
+
+/** 下注操作板（弃牌/过牌/加注）打开时，把展开的手牌抬到面板上方，不遮挡操作 */
+function applyLift(overlay: HTMLElement | null = cardOverlay.value) {
+  if (!overlay) return;
+  let pad = 22;
+  if (store.yourTurn) {
+    const panel = document.querySelector<HTMLElement>('.bet-panel');
+    if (panel) {
+      const r = panel.getBoundingClientRect();
+      if (r.height) pad = Math.max(22, window.innerHeight - r.top + 12);
+    }
+  }
+  overlay.style.paddingBottom = `${pad}px`;
+}
+
+// 手牌展开期间，轮到行动（面板出现/消失）时重算牌面上浮高度
+watch(
+  () => [store.cardsVisible, store.yourTurn] as const,
+  () => nextTick(() => applyLift()),
+);
+
+/**
+ * 手牌展开时，点击页面任意位置收起手牌。
+ * 用 document 监听而非全屏遮罩：点击下层按钮（加注/弹幕/看牌等）时按钮照常生效，手牌同时收起。
+ * 常驻监听 + 内部守卫（cardsVisible 为 true 才收起），避免依赖 watch 挂/摘监听的时序问题。
+ */
+function onDocClick(e: MouseEvent) {
+  if (!store.cardsVisible) return;
+  // 点击「看牌」按钮本身时交给它自己的 toggle 处理，避免展开后立刻被本监听收起
+  const t = e.target as HTMLElement | null;
+  if (t?.closest('.peek-fab')) return;
+  store.dismissCards();
+}
+
+/** 计算从图标到浮层中心的位移与缩放（动画起点/终点共用） */
+function riseTransform(from: DOMRect, to: DOMRect) {
+  return {
+    x: from.left + from.width / 2 - (to.left + to.width / 2),
+    y: from.top + from.height / 2 - (to.top + to.height / 2),
+    scale: Math.min(from.width / to.width, from.height / to.height),
+  };
+}
+
+/** 展开：从图标处的两张牌背开始，翻牌并放大到屏幕下方 */
+function onCardsEnter(el: Element, done: () => void) {
+  const icon = peekFab.value;
+  const cards = el.querySelector('.co-cards');
+  if (!icon || !cards) return done();
+  applyLift(el as HTMLElement);
+  const from = icon.getBoundingClientRect();
+  const to = cards.getBoundingClientRect();
+  if (!to.width || !to.height) return done();
+  const t = riseTransform(from, to);
+  gsap.fromTo(
+    cards,
+    { transformPerspective: 900, x: t.x, y: t.y, scale: t.scale, rotationY: 180, opacity: 0 },
+    {
+      x: 0,
+      y: 0,
+      scale: 1,
+      rotationY: 0,
+      opacity: 1,
+      duration: 0.5,
+      ease: 'power3.out',
+      onComplete: done,
+    },
+  );
+}
+
+/** 收起：翻回牌背并缩回图标位置 */
+function onCardsLeave(el: Element, done: () => void) {
+  const icon = peekFab.value;
+  const cards = el.querySelector('.co-cards');
+  if (!icon || !cards) return done();
+  const from = icon.getBoundingClientRect();
+  const to = cards.getBoundingClientRect();
+  if (!to.width || !to.height) return done();
+  // 若展开动画尚未结束（用户快速点击按钮收起），先停掉旧 tween，避免两个动画打架导致无法收起
+  gsap.killTweensOf(cards);
+  const t = riseTransform(from, to);
+  gsap.to(cards, {
+    transformPerspective: 900,
+    x: t.x,
+    y: t.y,
+    scale: t.scale,
+    rotationY: 180,
+    opacity: 0,
+    duration: 0.4,
+    ease: 'power2.in',
+    onComplete: done,
+  });
+}
+
 onMounted(async () => {
   store.wireSocket();
   store.resetForRoom();
+  window.addEventListener('resize', scheduleFabLifts);
+  document.addEventListener('click', onDocClick);
   socket.on(EV.RoomDissolved, onDissolved);
   socket.on(EV.RoomKicked, onKicked);
   if (!socket.connected) socket.connect();
@@ -94,6 +304,10 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+  window.removeEventListener('resize', scheduleFabLifts);
+  panelResizeObserver?.disconnect();
+  panelResizeObserver = null;
+  document.removeEventListener('click', onDocClick);
   socket.off(EV.RoomDissolved, onDissolved);
   socket.off(EV.RoomKicked, onKicked);
   store.leaveRoom();
@@ -154,6 +368,18 @@ async function leaveRoom() {
   await store.leaveRoom();
   router.push('/');
 }
+
+/** 点击「离开」：房主需二次确认（会转让房主 / 无其他玩家时回收房间），普通玩家直接离开 */
+function onLeaveClick() {
+  menuOpen.value = false;
+  if (store.isHost) leaveOpen.value = true;
+  else leaveRoom();
+}
+
+function confirmLeave() {
+  leaveOpen.value = false;
+  leaveRoom();
+}
 </script>
 
 <template>
@@ -185,7 +411,8 @@ async function leaveRoom() {
     <header class="topbar">
       <div class="left">
         <span class="room-code">
-          房间 <strong>{{ store.room?.code }}</strong>
+          房间
+          <strong class="code-clickable" title="点击复制房间号" @click="copyCode">{{ store.room?.code }}</strong>
           <span v-if="store.room?.isPrivate" class="priv-tag" title="私密房间：不出现在大厅，仅凭邀请加入">🔒</span>
         </span>
         <span v-if="store.isHost" class="host-tag" title="你是房主">房主</span>
@@ -222,6 +449,10 @@ async function leaveRoom() {
           <span class="mi-icon">🔗</span>
           <span>邀请</span>
         </button>
+        <button class="menu-item" @click="infoOpen = true; menuOpen = false">
+          <span class="mi-icon">ℹ️</span>
+          <span>房间信息</span>
+        </button>
         <button
           v-if="store.isHost"
           class="menu-item danger-text"
@@ -230,7 +461,7 @@ async function leaveRoom() {
           <span class="mi-icon">🗑️</span>
           <span>解散</span>
         </button>
-        <button class="menu-item leave" @click="leaveRoom(); menuOpen = false">
+        <button class="menu-item leave" @click="onLeaveClick()">
           <span class="mi-icon">🚪</span>
           <span>离开</span>
         </button>
@@ -240,8 +471,41 @@ async function leaveRoom() {
     <!-- 弹幕飘屏层 -->
     <DanmakuLayer />
 
-    <!-- 弹幕入口：右下角悬浮按钮（结算面板冻结牌桌时也可用） -->
-    <button class="danmaku-fab" :class="{ active: danmakuOpen }" @click="danmakuOpen = !danmakuOpen">💬 弹幕</button>
+    <!-- 弹幕入口：右下角悬浮按钮（结算面板冻结牌桌时也可用）；输入框打开后隐藏自身 -->
+    <button
+      v-if="!danmakuOpen"
+      ref="danmakuFab"
+      class="danmaku-fab"
+      :style="danmakuStyle"
+      @click="danmakuOpen = !danmakuOpen"
+    >💬 弹幕</button>
+
+    <!-- 看牌入口：左下角 V 形两张牌背图标（无文字），本人在手牌中持有底牌时显示 -->
+    <button
+      v-if="canViewCards"
+      ref="peekFab"
+      class="peek-fab"
+      :class="{ active: store.cardsVisible }"
+      :style="peekStyle"
+      aria-label="查看我的底牌"
+      @click="store.toggleCards()"
+    >
+      <span class="peek-v" :class="{ revealed: store.cardsVisible }">
+        <PlayingCard
+          :card="store.cardsVisible ? (store.holeCards[0] ?? null) : null"
+          :face-up="store.cardsVisible"
+          size="mini"
+          class="pv-a"
+        />
+        <PlayingCard
+          :card="store.cardsVisible ? (store.holeCards[1] ?? null) : null"
+          :face-up="store.cardsVisible"
+          size="mini"
+          class="pv-b"
+        />
+      </span>
+      <span class="peek-tip">{{ store.cardsVisible ? '点击盖上手牌' : '点击查看当前手牌' }}</span>
+    </button>
 
     <!-- 弹幕输入面板 -->
     <DanmakuInput :open="danmakuOpen" @close="danmakuOpen = false" />
@@ -258,6 +522,15 @@ async function leaveRoom() {
       <!-- 结算面板：只覆盖牌桌区域，顶栏按钮/右侧记录栏/弹幕入口保持可用 -->
       <HandSummary />
     </main>
+
+    <!-- 我的底牌：最顶层浮层，从图标翻牌放大到屏幕下方，点击任意位置收起（收起逻辑见 onDocClick） -->
+    <transition :css="false" @enter="onCardsEnter" @leave="onCardsLeave">
+      <div v-if="canViewCards && store.cardsVisible" ref="cardOverlay" class="card-overlay">
+        <div class="co-cards">
+          <PlayingCard v-for="(c, i) in store.holeCards" :key="i" :card="c" face-up size="normal" />
+        </div>
+      </div>
+    </transition>
 
     <!-- 大厅控制条 -->
     <div v-if="lobby" class="lobby-bar">
@@ -322,10 +595,16 @@ async function leaveRoom() {
       <div v-if="store.errorMsg" class="toast">{{ store.errorMsg }}</div>
     </transition>
 
+    <!-- 复制成功提示 -->
+    <transition name="fade">
+      <div v-if="copied" class="copy-toast">复制成功</div>
+    </transition>
+
     <!-- 弹层 -->
     <BuyInDialog :open="buyInOpen" :mode="buyInMode" @confirm="confirmBuyIn" @close="buyInOpen = false" />
     <QrInvite :open="qrOpen" :url="store.inviteUrl" :code="store.room?.code ?? ''" @close="qrOpen = false" />
     <RoomSettingsDialog :open="settingsOpen" @close="settingsOpen = false" />
+    <RoomInfoDialog :open="infoOpen" @close="infoOpen = false" />
     <ConfirmDialog
       :open="dissolveOpen"
       title="解散房间"
@@ -333,6 +612,14 @@ async function leaveRoom() {
       confirm-text="确认解散"
       @confirm="confirmDissolve"
       @close="dissolveOpen = false"
+    />
+    <ConfirmDialog
+      :open="leaveOpen"
+      title="离开房间"
+      message="你是房主，离开后房主身份将自动转让给房间内的下一位玩家；若房间内已无其他玩家，该房间将被自动回收。确定离开吗？"
+      confirm-text="确认离开"
+      @confirm="confirmLeave"
+      @close="leaveOpen = false"
     />
   </div>
 </template>
@@ -369,6 +656,13 @@ async function leaveRoom() {
   color: var(--gold);
   letter-spacing: 2px;
   font-size: 16px;
+}
+.room-code strong.code-clickable {
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+.room-code strong.code-clickable:hover {
+  opacity: 0.7;
 }
 .priv-tag {
   margin-left: 4px;
@@ -434,9 +728,90 @@ async function leaveRoom() {
 .danmaku-fab.active {
   background: linear-gradient(180deg, #4cc9f0, #1d8fb8);
 }
-/* 行动面板展开时：把弹幕按钮抬高，避免被下注按钮遮挡 */
-.room.action-open .danmaku-fab {
-  bottom: calc(90px + env(safe-area-inset-bottom));
+
+/* 看牌入口：左下角 V 形两张牌背图标（无文字、无边框底色），与弹幕按钮左右对称 */
+.peek-fab {
+  position: fixed;
+  left: 18px;
+  bottom: calc(18px + env(safe-area-inset-bottom));
+  z-index: 301;
+  padding: 6px;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  cursor: pointer;
+  line-height: 0;
+}
+/* hover 提示气泡：说明点击可查看/盖上手牌 */
+.peek-tip {
+  position: absolute;
+  left: calc(100% + 8px);
+  top: 50%;
+  transform: translateY(-50%);
+  white-space: nowrap;
+  background: rgba(18, 24, 30, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 6px 10px;
+  border-radius: 8px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+}
+@media (hover: hover) and (pointer: fine) {
+  .peek-fab:hover .peek-tip {
+    opacity: 1;
+  }
+}
+/* 图标内两张牌：盖牌摆成 V 形，一张压住另一张 */
+.peek-v {
+  position: relative;
+  display: block;
+  width: 40px;
+  height: 56px;
+}
+.peek-v .pv-a,
+.peek-v .pv-b {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+}
+.peek-v .pv-a {
+  transform: translate(-50%, -50%) rotate(-14deg);
+}
+.peek-v .pv-b {
+  transform: translate(-50%, -50%) rotate(14deg);
+}
+/* 展开后：图标变为正面图案，整体模糊化 */
+.peek-v.revealed {
+  filter: blur(3.5px);
+}
+
+/* 我的底牌：最顶层浮层，浮于下注栏等组件之上，不占用布局空间 */
+.card-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  pointer-events: none;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: calc(22px + env(safe-area-inset-bottom));
+}
+.co-cards {
+  position: relative;
+  display: flex;
+  gap: 18px;
+  pointer-events: none;
+  will-change: transform, opacity;
+}
+/* 展开的底牌放大显示 */
+.co-cards :deep(.card) {
+  --w: 92px;
+  --h: 127px;
 }
 
 .table-zone {
@@ -630,6 +1005,21 @@ async function leaveRoom() {
   z-index: 200;
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
 }
+.copy-toast {
+  position: fixed;
+  left: 50%;
+  top: 60px;
+  transform: translateX(-50%);
+  background: rgba(18, 24, 30, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  color: var(--text);
+  font-size: 14px;
+  padding: 8px 20px;
+  border-radius: 10px;
+  z-index: 200;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(6px);
+}
 .fade-enter-active,
 .fade-leave-active {
   transition: opacity 0.3s;
@@ -715,11 +1105,20 @@ async function leaveRoom() {
     padding: 9px 16px;
     font-size: 14px;
   }
+  .peek-fab {
+    left: 12px;
+    bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+    padding: 5px;
+  }
+  .co-cards {
+    gap: 14px;
+  }
+  .co-cards :deep(.card) {
+    --w: 58px;
+    --h: 80px;
+  }
   .danmaku-mobile {
     display: none;
-  }
-  .room.action-open .danmaku-fab {
-    bottom: calc(100px + env(safe-area-inset-bottom, 0px));
   }
   .start-btn {
     font-size: 13px;

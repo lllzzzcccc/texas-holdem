@@ -6,6 +6,7 @@ import type {
   EmojiThrowPayload,
   GameEvent,
   LegalActions,
+  RoomConfigNotice,
   RoomState,
   RoomSummary,
 } from '@th/shared';
@@ -50,6 +51,8 @@ export const useRoomStore = defineStore('room', {
     joined: false,
     joining: false,
     holeCards: [] as CardStr[],
+    /** 底部手牌面板是否展开（发牌后默认展示，点击「看牌」按钮切换） */
+    cardsVisible: false,
     yourTurn: null as LegalActions | null,
     socketConnected: false,
     errorMsg: '' as string,
@@ -165,6 +168,8 @@ export const useRoomStore = defineStore('room', {
       });
       socket.on(EV.HoleCards, (p: { cards: CardStr[] }) => {
         this.holeCards = p.cards;
+        // 不在收到底牌时立即亮牌：等发牌动画播完再亮（见 anim/queue.ts 的 deal_hole），
+        // 重连/加入则交由 snapGates 直接亮牌，避免「刚开局就裸亮两张牌」。
       });
       socket.on(EV.YourTurn, (legal: LegalActions) => {
         this.yourTurn = legal;
@@ -181,6 +186,15 @@ export const useRoomStore = defineStore('room', {
         this.danmakus.push({ id: ++danmakuId, ...p });
         this.log(`💬 ${p.text}`, 'info', p.nickname);
         sfx.danmaku();
+      });
+      socket.on(EV.RoomConfigured, (p: RoomConfigNotice) => {
+        const lines = p.changes.map((c) => `${c.label}：${c.value}`).join('　');
+        this.banner('房主已更新房间配置', lines, 3200);
+        this.log('房主已更新房间配置', 'info');
+      });
+      socket.on(EV.GameStopped, (p: { message: string }) => {
+        this.banner(p.message);
+        this.log(p.message, 'info');
       });
       this.socketConnected = socket.connected;
     },
@@ -205,6 +219,10 @@ export const useRoomStore = defineStore('room', {
       this.drawnSeats = g?.dealerDraw?.draws.map((d) => d.seatIndex) ?? [];
       this.drawRevealed = !!g?.dealerDraw?.dealerSeat;
       this.currentHand = g?.handNumber ?? 0;
+      // 快照/重连没有发牌动画：本人仍手持底牌且未弃牌就直接亮牌
+      const mine = state.seats.find((s) => s?.playerId === this.playerId);
+      this.cardsVisible =
+        state.status === 'playing' && !!mine && (mine.holeCards?.length ?? 0) > 0 && !mine.hasFolded;
     },
 
     /** 闸门上界与状态对齐（防止动画遗漏导致卡在不一致画面） */
@@ -230,6 +248,7 @@ export const useRoomStore = defineStore('room', {
       this.room = null;
       this.joined = false;
       this.holeCards = [];
+      this.cardsVisible = false;
       this.yourTurn = null;
       this.banners = [];
       this.actionLog = [];
@@ -384,6 +403,16 @@ export const useRoomStore = defineStore('room', {
       socket.emit(EV.GameShowCard, { cardIndex }, (r: { ok: true } | ApiErr) => {
         if (isErr(r)) this.toast(r.message);
       });
+    },
+
+    /** 切换底部手牌面板的显示/隐藏 */
+    toggleCards() {
+      this.cardsVisible = !this.cardsVisible;
+    },
+
+    /** 收起底部手牌面板（仅当展开时收起，幂等，不切换） */
+    dismissCards() {
+      this.cardsVisible = false;
     },
 
     /** 打开/关闭某座位头像旁的表情选择盘 */

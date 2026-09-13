@@ -362,6 +362,7 @@ export class HandEngine {
     for (const p of this.players) {
       p.bet = 0;
       p.acted = false;
+      p.lastAction = null; // 上一街的动作标识随街道推进清空（翻牌/转牌/河牌后不再显示）
     }
     this.currentBet = 0;
     this.lastRaiseSize = this.config.bigBlind;
@@ -422,7 +423,7 @@ export class HandEngine {
 
     // 边池分层，逐层比牌分配
     const pots = buildPots(
-      this.players.map((p) => ({ seatIndex: p.seatIndex, amount: p.committed, folded: p.folded })),
+      this.players.map((p) => ({ seatIndex: p.seatIndex, amount: p.committed, folded: p.folded, allIn: p.allIn })),
     );
     const awardMap = new Map<number, { amount: number; handName: string | null }>();
     for (const pot of pots) {
@@ -476,7 +477,7 @@ export class HandEngine {
   /** 生成公开游戏状态（座位部分由 Room 通过 toSeatStates 组装） */
   toPublicState(): GameState {
     const pots = buildPots(
-      this.players.map((p) => ({ seatIndex: p.seatIndex, amount: p.committed, folded: p.folded })),
+      this.players.map((p) => ({ seatIndex: p.seatIndex, amount: p.committed, folded: p.folded, allIn: p.allIn })),
     );
     return {
       phase: this.phase,

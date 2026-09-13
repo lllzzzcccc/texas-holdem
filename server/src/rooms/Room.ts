@@ -7,6 +7,7 @@ import type {
   GameEvent,
   GameState,
   LegalActions,
+  RoomConfigChange,
   RoomState,
   SeatState,
 } from '@th/shared';
@@ -119,7 +120,8 @@ export class Room {
     const seats = Math.floor(options.maxSeats ?? 9);
     this.maxSeats = Math.min(9, Math.max(2, Number.isFinite(seats) ? seats : 9));
     const turnSec = Math.floor(options.turnTimeoutSec ?? 30);
-    this.turnTimeoutMs = Math.min(120, Math.max(10, Number.isFinite(turnSec) ? turnSec : 30)) * 1000;
+    // 0 = 不限时；其余钳制到 10~120 秒
+    this.turnTimeoutMs = turnSec === 0 ? 0 : Math.min(120, Math.max(10, Number.isFinite(turnSec) ? turnSec : 30)) * 1000;
     const hands = Math.floor(options.maxHands ?? 0);
     this.maxHands = Math.min(200, Math.max(0, Number.isFinite(hands) ? hands : 0));
     this.isPrivate = options.isPrivate === true;
@@ -334,14 +336,31 @@ export class Room {
     if (seats < maxOccupied) throw new Error(`已有玩家坐在 ${maxOccupied} 号位，座位数不能小于它`);
 
     const turnSec = Math.floor(options.turnTimeoutSec ?? this.turnTimeoutMs / 1000);
-    if (!Number.isFinite(turnSec) || turnSec < 10 || turnSec > 120) throw new Error('思考时间需在 10~120 秒之间');
+    // 0 = 不限时；其余需在 10~120 秒之间
+    const turnValid = Number.isFinite(turnSec) && (turnSec === 0 || (turnSec >= 10 && turnSec <= 120));
+    if (!turnValid) throw new Error('出牌时间需为「不限时」或 10~120 秒');
 
     const hands = Math.floor(options.maxHands ?? this.maxHands);
     if (!Number.isFinite(hands) || hands < 0 || hands > 200) throw new Error('回合数需在 0~200 之间');
 
-    if (options.isPrivate !== undefined) this.isPrivate = options.isPrivate === true;
-    if (options.password !== undefined) this.password = normalizeRoomPassword(options.password);
+    const nextPrivate = options.isPrivate === undefined ? this.isPrivate : options.isPrivate === true;
+    const nextPassword = options.password === undefined ? this.password : normalizeRoomPassword(options.password);
 
+    // 记录实际变化的项，用于向全房间广播「房主已更新房间配置」通知
+    const changes: RoomConfigChange[] = [];
+    if (sb !== this.smallBlind || bb !== this.bigBlind) changes.push({ label: '盲注', value: `${sb}/${bb}` });
+    if (seats !== this.maxSeats) changes.push({ label: '最大座位', value: `${seats} 人` });
+    if (turnSec * 1000 !== this.turnTimeoutMs) {
+      changes.push({ label: '出牌时间', value: turnSec === 0 ? '不限时' : `${turnSec} 秒` });
+    }
+    if (hands !== this.maxHands) changes.push({ label: '回合数', value: hands === 0 ? '不限' : `${hands} 手` });
+    if (nextPrivate !== this.isPrivate) changes.push({ label: '房间类型', value: nextPrivate ? '私密' : '公共' });
+    if (options.password !== undefined && nextPassword !== this.password) {
+      changes.push({ label: '加入密码', value: nextPassword ? '已设置' : '已清除' });
+    }
+
+    this.isPrivate = nextPrivate;
+    this.password = nextPassword;
     this.smallBlind = sb;
     this.bigBlind = bb;
     this.minBuyIn = bb * 20;
@@ -352,6 +371,7 @@ export class Room {
     this.turnTimeoutMs = turnSec * 1000;
     this.maxHands = hands;
     this.hooks.emitState();
+    if (changes.length > 0) this.hooks.broadcast(EV.RoomConfigured, { changes });
   }
 
   // ---------- 大厅 ----------
@@ -400,8 +420,11 @@ export class Room {
       revealed: false,
       dealerSeat: null,
     };
-    this.drawDeadline = Date.now() + this.turnTimeoutMs;
-    this.drawTimer = setTimeout(() => this.autoDrawMissing(), this.turnTimeoutMs);
+    // 不限时（turnTimeoutMs = 0）：抽牌阶段不设自动补抽，玩家可从容选择
+    if (this.turnTimeoutMs > 0) {
+      this.drawDeadline = Date.now() + this.turnTimeoutMs;
+      this.drawTimer = setTimeout(() => this.autoDrawMissing(), this.turnTimeoutMs);
+    }
     this.hooks.emitState();
   }
 
@@ -541,6 +564,7 @@ export class Room {
     // 手牌进行中不可结束；整局已结束（status 已回大厅、仅剩结算面板）时同样可结束清场
     if (this.engine && !this.engine.isHandEnded) throw new Error('手牌进行中，请等本手结束');
     this.resetToLobby();
+    this.hooks.broadcast(EV.GameStopped, { message: '房主已结束游戏' });
   }
 
   action(playerId: string, action: 'fold' | 'check' | 'call' | 'raise', amount?: number): void {
@@ -639,7 +663,7 @@ export class Room {
       if (!seat) continue;
       seat.stack = stack;
       if (stack === 0) {
-        // 筹码归零：保留座位（显示"已淘汰"），可在大厅补码后继续；
+        // 筹码归零：保留座位（前端不再显示「已淘汰」），可在大厅补码后继续；
         // 不补码则自动排除在下一手之外
         this.emit({ type: 'player_eliminated', seatIndex });
       }
@@ -772,10 +796,19 @@ export class Room {
     this.clearTurnTimer();
     if (!this.engine || this.engine.actingSeat === null) return;
     const actingOnline = this.actingPlayerOnline();
-    // 离线/已离开的玩家：不等完整回合计时，轮到即快速自动弃牌
-    const delay = actingOnline ? this.turnTimeoutMs : 800;
-    this.turnDeadline = Date.now() + delay;
-    this.turnTimer = setTimeout(() => this.onTurnTimeout(), delay);
+    // 离线/已离开的玩家：轮到即快速自动弃牌（不限时模式下同样适用，避免断线卡住整局）
+    if (!actingOnline) {
+      this.turnDeadline = Date.now() + 800;
+      this.turnTimer = setTimeout(() => this.onTurnTimeout(), 800);
+      return;
+    }
+    // 不限时（turnTimeoutMs = 0）：在线玩家不设倒计时，可无限思考
+    if (this.turnTimeoutMs <= 0) {
+      this.turnDeadline = null;
+      return;
+    }
+    this.turnDeadline = Date.now() + this.turnTimeoutMs;
+    this.turnTimer = setTimeout(() => this.onTurnTimeout(), this.turnTimeoutMs);
   }
 
   private actingPlayerOnline(): boolean {

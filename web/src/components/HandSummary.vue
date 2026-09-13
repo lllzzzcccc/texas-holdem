@@ -245,8 +245,15 @@ const gameOver = computed(() => store.room?.status === 'lobby');
   border-radius: 4px;
   transition: transform 0.15s;
 }
-.card-click.clickable:hover {
-  transform: translateY(-2px);
+/* 触摸设备没有真正的 hover：点击后 :hover 会吸附，导致牌抬起后不回落。
+   仅在支持悬停的指针设备上启用「悬停抬升 / 悬停虚化窥牌」效果 */
+@media (hover: hover) and (pointer: fine) {
+  .card-click.clickable:hover {
+    transform: translateY(-2px);
+  }
+  .card-click.clickable:hover .card-veil.veiled {
+    filter: blur(0.8px) saturate(0.8) brightness(0.95);
+  }
 }
 /* 本人未亮出的牌：虚化的正面（自己认得，别人看到的是盖牌） */
 .card-veil {
@@ -256,9 +263,6 @@ const gameOver = computed(() => store.room?.status === 'lobby');
 .card-veil.veiled {
   filter: blur(1.6px) saturate(0.6) brightness(0.88);
   opacity: 0.82;
-}
-.card-click.clickable:hover .card-veil.veiled {
-  filter: blur(0.8px) saturate(0.8) brightness(0.95);
 }
 .r-name .r-tag {
   margin-left: 6px;

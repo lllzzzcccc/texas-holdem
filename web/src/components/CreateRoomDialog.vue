@@ -2,11 +2,21 @@
 import { ref, watch } from 'vue';
 import { useRoomStore } from '../stores/room';
 import { BLIND_PRESETS, HAND_OPTIONS, SEAT_OPTIONS, TURN_OPTIONS } from '../utils/roomOptions';
+import SelectField, { type SelectOption } from './SelectField.vue';
 
 const props = defineProps<{ open: boolean; nickname: string }>();
 const emit = defineEmits<{ close: []; created: [code: string] }>();
 
 const store = useRoomStore();
+
+const blindOptions: SelectOption[] = BLIND_PRESETS.map((b) => ({ value: b, label: b }));
+const seatOptions: SelectOption[] = SEAT_OPTIONS.map((n) => ({ value: n, label: `${n} 人` }));
+const turnOptions: SelectOption[] = TURN_OPTIONS;
+const handOptions: SelectOption[] = HAND_OPTIONS;
+const visibilityOptions: SelectOption[] = [
+  { value: 'public', label: '公共（大厅可见）' },
+  { value: 'private', label: '私密（仅邀请可进）' },
+];
 
 const blindPreset = ref('10/20');
 const maxSeats = ref(9);
@@ -56,37 +66,26 @@ async function submit() {
         <p class="hint">以「{{ nickname }}」的身份创建</p>
 
         <div class="options-grid">
-          <label class="field">
+          <div class="field">
             <span>盲注</span>
-            <select v-model="blindPreset">
-              <option v-for="b in BLIND_PRESETS" :key="b" :value="b">{{ b }}</option>
-            </select>
-          </label>
-          <label class="field">
+            <SelectField v-model="blindPreset" :options="blindOptions" />
+          </div>
+          <div class="field">
             <span>最大座位</span>
-            <select v-model.number="maxSeats">
-              <option v-for="n in SEAT_OPTIONS" :key="n" :value="n">{{ n }} 人</option>
-            </select>
-          </label>
-          <label class="field">
-            <span>思考时间</span>
-            <select v-model.number="turnTimeoutSec">
-              <option v-for="t in TURN_OPTIONS" :key="t" :value="t">{{ t }} 秒</option>
-            </select>
-          </label>
-          <label class="field">
+            <SelectField v-model="maxSeats" :options="seatOptions" />
+          </div>
+          <div class="field">
+            <span>出牌时间</span>
+            <SelectField v-model="turnTimeoutSec" :options="turnOptions" />
+          </div>
+          <div class="field">
             <span>回合数</span>
-            <select v-model.number="maxHands">
-              <option v-for="h in HAND_OPTIONS" :key="h.value" :value="h.value">{{ h.label }}</option>
-            </select>
-          </label>
-          <label class="field">
+            <SelectField v-model="maxHands" :options="handOptions" />
+          </div>
+          <div class="field">
             <span>房间类型</span>
-            <select v-model="visibility">
-              <option value="public">公共（大厅可见）</option>
-              <option value="private">私密（仅邀请可进）</option>
-            </select>
-          </label>
+            <SelectField v-model="visibility" :options="visibilityOptions" />
+          </div>
           <label v-if="visibility === 'private'" class="field">
             <span>房间密码（选填）</span>
             <input
@@ -151,7 +150,6 @@ h3 {
   font-size: 13px;
   color: var(--text-dim);
 }
-.field select,
 .field input {
   width: 100%;
   background: rgba(255, 255, 255, 0.08);
@@ -162,18 +160,10 @@ h3 {
   font-size: 14px;
   font-family: inherit;
   outline: none;
-  cursor: pointer;
-}
-.field input {
   cursor: text;
 }
-.field select:focus,
 .field input:focus {
   border-color: var(--accent);
-}
-.field select option {
-  background: #16324f;
-  color: #fff;
 }
 .btn-row {
   display: flex;

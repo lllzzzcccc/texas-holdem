@@ -1,7 +1,8 @@
 /**
- * 音效：全部用 Web Audio API 合成，无音频资源文件。
+ * 音效：大部分用 Web Audio API 合成，仅 all-in 惊呼用真实音频 wow.m4a。
  * 浏览器自动播放策略：首次用户手势时调用 unlockAudio() 解锁。
  */
+import wowUrl from '@/assets/sounds/wow.m4a';
 
 let ctx: AudioContext | null = null;
 let enabled = (() => {
@@ -41,6 +42,14 @@ function ac(): AudioContext | null {
   }
   if (ctx.state === 'suspended') ctx.resume().catch(() => {});
   return ctx;
+}
+
+/** 播放本地音频资源文件（受 enabled 开关约束） */
+function playFile(url: string, volume = 1): void {
+  if (!enabled) return;
+  const a = new Audio(url);
+  a.volume = volume;
+  a.play().catch(() => {});
 }
 
 interface ToneOpts {
@@ -132,6 +141,10 @@ export const sfx = {
   dealer() {
     tone(1046, 0.15, { gain: 0.09 });
     tone(1318, 0.2, { gain: 0.09, when: 0.12 });
+  },
+  /** 全下：众人惊呼（真实音频 wow.m4a） */
+  allin() {
+    playFile(wowUrl);
   },
   /** 胜利：上行琶音 */
   win() {

@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { LOBBY_MAX_ROOMS, type RoomSummary } from '@th/shared';
 import { useRoomStore } from '../stores/room';
-import { savedNickname, socket } from '../socket';
+import { savedNickname, saveNickname, socket } from '../socket';
 import CreateRoomDialog from '../components/CreateRoomDialog.vue';
 
 const router = useRouter();
@@ -34,6 +34,7 @@ function openCreate() {
 
 function joinRoom() {
   if (!nickname.value.trim() || roomCode.value.trim().length !== 6) return;
+  saveNickname(nickname.value.trim());
   router.push(`/room/${roomCode.value.trim().toUpperCase()}`);
 }
 
@@ -42,6 +43,7 @@ function enterTable(room: RoomSummary) {
     store.toast('请先填写昵称再进入牌桌');
     return;
   }
+  saveNickname(nickname.value.trim());
   router.push(`/room/${room.code}`);
 }
 
@@ -94,7 +96,13 @@ function seatDots(room: RoomSummary): boolean[] {
       <!-- 右侧：游戏大厅 -->
       <section class="hall card-panel">
         <div class="hall-header">
-          <h2>游戏大厅</h2>
+          <div class="hall-title">
+            <h2>游戏大厅</h2>
+            <span class="hall-tip">
+              <span class="tip-icon">!</span>
+              <span class="tip-tooltip">与世界各地玩家共同竞技德州吧！</span>
+            </span>
+          </div>
         </div>
 
         <div v-if="store.lobbyRooms.length === 0" class="hall-empty">
@@ -261,9 +269,71 @@ function seatDots(room: RoomSummary): boolean[] {
   align-items: baseline;
   margin-bottom: 16px;
 }
+.hall-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
 .hall-header h2 {
   font-size: 20px;
   letter-spacing: 3px;
+}
+.hall-tip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  cursor: help;
+  outline: none;
+}
+.tip-icon {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px solid var(--text-dim);
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition:
+    color 0.15s,
+    border-color 0.15s;
+}
+.hall-tip:hover .tip-icon {
+  color: var(--gold);
+  border-color: var(--gold);
+}
+.tip-tooltip {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  width: max-content;
+  max-width: min(78vw, 280px);
+  padding: 8px 12px;
+  background: #16324f;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: normal;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-4px);
+  transition:
+    opacity 0.15s ease,
+    transform 0.15s ease,
+    visibility 0.15s;
+  pointer-events: none;
+  z-index: 30;
+}
+.hall-tip:hover .tip-tooltip {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
 }
 .hall-empty {
   display: flex;

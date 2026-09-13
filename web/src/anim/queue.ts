@@ -151,6 +151,7 @@ async function handle(ev: GameEvent, store: Store): Promise<void> {
       store.awardsVisible = false;
       store.drawnSeats = [];
       store.drawRevealed = false;
+      store.cardsVisible = false; // 新一局默认盖住，等发牌动画结束后再亮
       store.currentHand = ev.handNumber;
       store.log(`—— 第 ${ev.handNumber} 手牌 ——`, 'divider');
       store.banner(`第 ${ev.handNumber} 手牌`, undefined, 1200);
@@ -184,6 +185,9 @@ async function handle(ev: GameEvent, store: Store): Promise<void> {
       }
       await sleep(250);
       store.dealtSeats = [...ev.seatIndexes];
+      // 发牌动作全部结束后，若本人也在发牌名单里，再亮出自己的两张底牌
+      const me = store.mySeat;
+      store.cardsVisible = me !== null && ev.seatIndexes.includes(me);
       await sleep(350);
       break;
     }
@@ -199,13 +203,19 @@ async function handle(ev: GameEvent, store: Store): Promise<void> {
         store.log('过牌', 'action', nick);
         await sleep(220);
       } else {
-        sfx.chips();
         const from = seatAnchor(store, ev.seatIndex);
         const to = potPoint();
         if (from && to) await flyChips(from, to, 0.35);
-        if (ev.action === 'call') store.log(`跟注 ${ev.amount}`, 'action', nick);
-        else if (ev.action === 'allin') store.log(`全下 ${ev.betTotal}`, 'action', nick);
-        else store.log(`加注到 ${ev.betTotal}`, 'action', nick);
+        if (ev.action === 'allin') {
+          sfx.allin();
+          store.log(`全下 ${ev.betTotal}`, 'action', nick);
+        } else if (ev.action === 'call') {
+          sfx.chips();
+          store.log(`跟注 ${ev.amount}`, 'action', nick);
+        } else {
+          sfx.chips();
+          store.log(`加注到 ${ev.betTotal}`, 'action', nick);
+        }
       }
       break;
     }

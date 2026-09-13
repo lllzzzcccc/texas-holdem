@@ -111,7 +111,7 @@ export interface RoomState {
   maxBuyIn: number;
   smallBlind: number;
   bigBlind: number;
-  /** 回合行动最长时间（ms） */
+  /** 回合行动最长时间（ms，0 = 不限时） */
   turnTimeoutMs: number;
   /** 房间回合数上限（0 = 不限） */
   maxHands: number;
@@ -129,7 +129,7 @@ export interface CreateRoomOptions {
   smallBlind?: number;
   bigBlind?: number;
   maxSeats?: number;
-  /** 回合行动最长时间（秒） */
+  /** 回合行动最长时间（秒，0 = 不限时） */
   turnTimeoutSec?: number;
   /** 回合数上限（0 = 不限） */
   maxHands?: number;
@@ -221,6 +221,8 @@ export const EV = {
   RoomState: 'room:state',
   RoomDissolved: 'room:dissolved',
   RoomKicked: 'room:kicked',
+  RoomConfigured: 'room:configured',
+  GameStopped: 'game:stopped',
   GameEvent: 'game:event',
   HoleCards: 'game:holeCards',
   YourTurn: 'game:yourTurn',
@@ -253,6 +255,17 @@ export interface DanmakuPayload {
   nickname: string;
   text: string;
   style: DanmakuStyle;
+}
+
+/** 房主修改房间参数后广播的单项变更 */
+export interface RoomConfigChange {
+  label: string;
+  value: string;
+}
+
+/** 房主修改房间参数的广播载荷（S→C，全房间提示） */
+export interface RoomConfigNotice {
+  changes: RoomConfigChange[];
 }
 
 /** 大厅同时容纳的牌桌上限 */
@@ -312,6 +325,8 @@ export interface ServerToClientEvents {
   [EV.RoomState]: (state: RoomState) => void;
   [EV.RoomDissolved]: (p: { message: string }) => void;
   [EV.RoomKicked]: (p: { message: string }) => void;
+  [EV.RoomConfigured]: (p: RoomConfigNotice) => void;
+  [EV.GameStopped]: (p: { message: string }) => void;
   [EV.GameEvent]: (ev: GameEvent) => void;
   [EV.HoleCards]: (p: HoleCardsPayload) => void;
   [EV.YourTurn]: (p: LegalActions) => void;

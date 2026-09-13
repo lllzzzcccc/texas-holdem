@@ -69,6 +69,8 @@ function close() {
   inset: 0;
   z-index: 97;
   pointer-events: none;
+  /* 缩放动画原点：右下角（弹幕按钮处），让面板从按钮处放大/缩小 */
+  transform-origin: bottom right;
 }
 .danmaku-backdrop {
   position: absolute;
@@ -77,9 +79,8 @@ function close() {
 }
 .danmaku-panel {
   position: absolute;
-  left: 50%;
-  bottom: 18px;
-  transform: translateX(-50%);
+  right: 18px;
+  bottom: calc(18px + env(safe-area-inset-bottom));
   z-index: 1;
   width: min(560px, 92vw);
   background: rgba(10, 20, 30, 0.94);
@@ -158,12 +159,12 @@ function close() {
 .slide-enter-active,
 .slide-leave-active {
   transition:
-    opacity 0.2s ease,
-    transform 0.2s ease;
+    opacity 0.22s ease,
+    transform 0.22s ease;
 }
 .slide-enter-from,
 .slide-leave-to {
   opacity: 0;
-  transform: translateX(-50%) translateY(14px);
+  transform: scale(0.8);
 }
 </style>

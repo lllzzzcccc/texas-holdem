@@ -97,17 +97,21 @@ function registerSpreadEl(i: number, el: Element | ComponentPublicInstance | nul
   registerDrawCardEl(i, el instanceof HTMLElement ? el : null);
 }
 
-/** 摊开牌堆的弧形布局：按容器宽度百分比均匀分布，永不超出桌面 */
+/** 摊开牌堆的弧形布局：固定步长紧密排布（轻微重叠的扇形），不再随人数摊开一整条 */
 function spreadStyle(i: number) {
   const total = spreadCount.value || 11;
   const center = (total - 1) / 2;
-  const norm = total > 1 ? (i - center) / Math.max(1, center) : 0; // -1 ~ 1
-  // 半展开宽度占容器宽度的百分比：窄屏更紧、横屏更宽，且端点留出半个牌宽的余量
-  const halfPct = portrait.value ? 40 : 30;
-  const arc = portrait.value ? 18 : 24;
-  const y = norm * norm * arc; // 两端上翘的弧线
-  const rot = norm * 6;
-  return { left: `${(50 + norm * halfPct).toFixed(2)}%`, transform: `translate(-50%, ${y}px) rotate(${rot}deg)`, zIndex: i + 1 };
+  const offset = i - center; // -center .. +center
+  // 相邻牌固定步长（px），任一人数都保持紧凑；竖屏牌更小步长更窄（与 .spread-card 尺寸匹配）
+  const step = portrait.value ? 30 : 38;
+  // 两端轻微上翘 + 外旋的弧线
+  const y = offset * offset * (portrait.value ? 0.5 : 0.9);
+  const rot = offset * 2.4;
+  return {
+    left: `calc(50% + ${(offset * step).toFixed(1)}px)`,
+    transform: `translate(-50%, ${y.toFixed(1)}px) rotate(${rot.toFixed(2)}deg)`,
+    zIndex: i + 1,
+  };
 }
 
 function pickCard(i: number) {
@@ -297,10 +301,21 @@ const drawTip = computed(() => {
   gap: 8px;
   align-items: center;
   justify-content: center;
+  /* 通过 CSS 变量统一驱动「牌」与「虚线框」的尺寸，保证牌始终小于虚线框；
+     各断点只改这三个变量即可整体缩放。 */
+  --card-w: 58px;
+  --card-h: 80px;
+  --slot-pad: 12px;
+}
+/* 公共牌沿用牌桌的尺寸变量，牌永远比虚线框小一圈 */
+.board :deep(.card) {
+  --w: var(--card-w);
+  --h: var(--card-h);
 }
 .board-slot {
-  width: 58px;
-  height: 80px;
+  /* 虚线框 = 牌 + 留白（box-sizing: border-box 已含 2px 边框） */
+  width: calc(var(--card-w) + var(--slot-pad));
+  height: calc(var(--card-h) + var(--slot-pad));
   border-radius: 6px;
   border: 2px dashed rgba(255, 255, 255, 0.22);
   background: rgba(0, 0, 0, 0.12);
@@ -460,10 +475,9 @@ const drawTip = computed(() => {
   }
   .board {
     gap: 5px;
-  }
-  .board-slot {
-    width: 46px;
-    height: 64px;
+    --card-w: 46px;
+    --card-h: 64px;
+    --slot-pad: 11px;
   }
   .board-hint {
     font-size: 18px;
@@ -493,10 +507,9 @@ const drawTip = computed(() => {
 }
 .table-outer.portrait .board {
   gap: 4px;
-}
-.table-outer.portrait .board-slot {
-  width: 44px;
-  height: 61px;
+  --card-w: 42px;
+  --card-h: 58px;
+  --slot-pad: 10px;
 }
 .table-outer.portrait .spread-card {
   width: 28px;
@@ -504,8 +517,10 @@ const drawTip = computed(() => {
   top: -20px;
 }
 .table-outer.portrait .deck-anchor {
-  left: 84%;
-  top: 44%;
+  /* 竖屏窄桌：公共牌几乎占满台面横向空间，右侧无空位放牌堆；
+     移到牌桌顶部中央（底池上方、公共牌上方），避开第 5 张公共牌与右侧座位 */
+  left: 50%;
+  top: 20%;
   transform: translate(-50%, -50%) scale(0.7);
 }
 .table-outer.portrait .pot-area {

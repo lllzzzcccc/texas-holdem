@@ -43,24 +43,8 @@ const betStyle = computed(() => {
   };
 });
 
-// ---------- 底牌显示 ----------
-
-const showHoleCards = computed(
-  () => !!props.seat?.holeCards && store.dealtSeats.includes(props.seat.seatIndex),
-);
-
-/** 每张牌的 [牌面, 是否亮出] */
-const holeCardViews = computed<[CardStr | null, boolean][]>(() => {
-  if (!showHoleCards.value || !props.seat?.holeCards) return [];
-  return props.seat.holeCards.map((c, i) => {
-    if (isMe.value) {
-      const own = store.holeCards[i] ?? c;
-      return [own ?? c, own !== null];
-    }
-    if (c !== null) return [c, store.showdownRevealed]; // 摊牌亮出
-    return [null, false]; // 牌背
-  });
-});
+/** 座位是否在牌桌左半屏（桌心在右侧，inward.dx > 0）。用于气泡/表情盘的水平翻转，避免越出屏幕。 */
+const onLeft = computed(() => inward.value.dx > 0);
 
 // ---------- 抽牌比大小 ----------
 
@@ -128,17 +112,6 @@ onBeforeUnmount(() => {
     </button>
 
     <template v-else>
-      <!-- 底牌 -->
-      <div v-if="showHoleCards" class="hole-cards" :class="{ me: isMe, folded: seat.hasFolded }">
-        <PlayingCard
-          v-for="(v, i) in holeCardViews"
-          :key="i"
-          :card="v[0]"
-          :face-up="v[1]"
-          :size="isMe ? 'normal' : 'mini'"
-        />
-      </div>
-
       <!-- 抽牌比大小的牌 -->
       <div v-if="showDrawCard" class="draw-card">
         <PlayingCard :card="drawCard ?? null" :face-up="drawCardFaceUp" size="mini" :flip-in="drawCardFaceUp" />
@@ -149,11 +122,12 @@ onBeforeUnmount(() => {
         <div class="avatar" :class="{ winner: isWinner, clickable: true }" title="点击投掷表情" @click.stop="onAvatarClick">
           <span>{{ initials }}</span>
           <span v-if="!seat.connected" class="offline-dot" title="离线">⚡</span>
+          <div v-if="seat.isDealer" class="dealer-btn">D</div>
         </div>
 
         <!-- 表情选择盘：环绕头像上方展开 -->
         <transition name="pop">
-          <div v-if="pickerOpen" class="emoji-picker-wrap">
+          <div v-if="pickerOpen" class="emoji-picker-wrap" :class="{ 'open-right': onLeft }">
             <div class="emoji-backdrop" @click.stop="onAvatarClick" />
             <div class="emoji-picker" @click.stop>
               <button v-for="e in emojis" :key="e" class="emoji-option" @click="pickEmoji(e)">{{ e }}</button>
@@ -168,16 +142,18 @@ onBeforeUnmount(() => {
           </div>
           <div class="stack">
             <template v-if="seat.stack > 0">{{ formatChips(seat.stack) }}</template>
-            <template v-else>已淘汰</template>
           </div>
         </div>
-        <div v-if="seat.isDealer" class="dealer-btn">D</div>
         <div v-if="seat.isAllIn" class="allin-tag">ALL-IN</div>
       </div>
 
       <!-- 动作气泡 -->
       <transition name="bubble">
-        <div v-if="seat.lastAction && store.phase !== 'lobby'" class="action-bubble" :class="bubbleClass(seat.lastAction)">
+        <div
+          v-if="seat.lastAction && store.phase !== 'lobby'"
+          class="action-bubble"
+          :class="[bubbleClass(seat.lastAction), { 'open-left': !onLeft }]"
+        >
           {{ seat.lastAction }}
         </div>
       </transition>
@@ -230,6 +206,9 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 3px;
   transition: filter 0.3s;
+  /* transform 会形成一个层叠上下文，把内部表情盘的 z-index 困住；
+     这里显式抬高层级，让头像与表情盘始终盖住同座位的下注筹码(z2)、动作气泡(z4) */
+  z-index: 10;
 }
 .seat-body.folded {
   filter: grayscale(0.9) brightness(0.6);
@@ -307,6 +286,15 @@ onBeforeUnmount(() => {
   right: calc(50% + 44px);
   top: -14px;
   z-index: 80;
+}
+/* 左半屏座位：表情盘翻转到头像右侧，避免越出屏幕左缘 */
+.emoji-picker-wrap.open-right {
+  right: auto;
+  left: calc(50% + 44px);
+}
+.emoji-picker-wrap.open-right .emoji-picker {
+  right: auto;
+  left: 0;
 }
 .emoji-backdrop {
   position: fixed;
@@ -405,7 +393,7 @@ onBeforeUnmount(() => {
 .dealer-btn {
   position: absolute;
   right: -6px;
-  top: -10px;
+  bottom: -6px;
   width: 24px;
   height: 24px;
   border-radius: 50%;
@@ -437,30 +425,6 @@ onBeforeUnmount(() => {
   transform: rotate(-8deg);
 }
 
-.hole-cards {
-  position: absolute;
-  left: 50%;
-  top: -46px;
-  transform: translateX(-50%);
-  display: flex;
-  gap: 4px;
-  z-index: 3;
-  animation: deal-in 0.3s ease;
-}
-.hole-cards.me {
-  top: -88px;
-}
-.hole-cards.folded {
-  opacity: 0.25;
-  filter: grayscale(1);
-}
-@keyframes deal-in {
-  from {
-    transform: translateX(-50%) scale(0.4);
-    opacity: 0;
-  }
-}
-
 .draw-card {
   position: absolute;
   left: 50%;
@@ -484,6 +448,11 @@ onBeforeUnmount(() => {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
   z-index: 4;
 }
+/* 右半屏座位：气泡翻转到头像左侧，避免「小盲 10」等标识越出屏幕右缘 */
+.action-bubble.open-left {
+  left: auto;
+  right: calc(50% + 42px);
+}
 .action-bubble.fold {
   background: #6c757d;
   color: #fff;
@@ -498,6 +467,13 @@ onBeforeUnmount(() => {
 .bubble-enter-from {
   opacity: 0;
   transform: translateY(8px) scale(0.7);
+}
+/* 街道推进清空动作标识时柔和淡出，避免突兀消失 */
+.bubble-leave-active {
+  transition: opacity 0.18s ease;
+}
+.bubble-leave-to {
+  opacity: 0;
 }
 
 .bet-chips {

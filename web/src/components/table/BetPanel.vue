@@ -62,6 +62,14 @@ function setRaise(v: number) {
   raiseTo.value = Math.min(legal.value.maxRaiseTo, Math.max(legal.value.minRaiseTo, Math.round(v)));
 }
 
+/** 本次加注需「再投入」的筹码 = 加注总额 − 本街已投入（= currentBet − callAmount） */
+const extraTo = computed(() => {
+  const l = legal.value;
+  if (!l) return 0;
+  const currentBet = store.room?.game?.currentBet ?? 0;
+  return Math.max(0, raiseTo.value - currentBet + l.callAmount);
+});
+
 function confirmRaise() {
   store.act('raise', raiseTo.value);
 }
@@ -113,6 +121,7 @@ function confirmRaise() {
         <div class="confirm-row">
           <div class="amount-display">
             加注到 <strong>{{ formatChips(raiseTo) }}</strong>
+            <span class="raise-extra">（再投入 {{ formatChips(extraTo) }}）</span>
             <span v-if="raiseTo === legal.maxRaiseTo" class="allin-hint">ALL-IN!</span>
           </div>
           <button class="ok act" @click="confirmRaise">确认加注</button>
@@ -242,6 +251,11 @@ input[type='range']::-webkit-slider-thumb {
 .amount-display strong {
   color: #ffd966;
   font-size: 19px;
+}
+.raise-extra {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-left: 2px;
 }
 .allin-hint {
   color: #ef476f;
