@@ -9,6 +9,19 @@ const legal = computed(() => store.yourTurn);
 const mode = ref<'actions' | 'raise'>('actions');
 const raiseTo = ref(0);
 
+/** 已选中的直接操作（弃牌/过牌/跟注）：首次点击选中，再次点击才真正执行 */
+const selected = ref<'fold' | 'check' | 'call' | null>(null);
+
+/** 弃牌/过牌/跟注：两段式确认——首次点击选中（四角包裹），再次点击同一按钮才触发 */
+function tryAct(kind: 'fold' | 'check' | 'call') {
+  if (selected.value === kind) {
+    selected.value = null;
+    store.act(kind);
+  } else {
+    selected.value = kind;
+  }
+}
+
 // 回合倒计时
 const now = ref(Date.now());
 let ticker: ReturnType<typeof setInterval> | null = null;
@@ -18,6 +31,7 @@ watch(
   (l) => {
     if (l) {
       mode.value = 'actions';
+      selected.value = null;
       raiseTo.value = l.minRaiseTo;
       now.value = Date.now();
       if (ticker) clearInterval(ticker);
@@ -70,6 +84,12 @@ const extraTo = computed(() => {
   return Math.max(0, raiseTo.value - currentBet + l.callAmount);
 });
 
+/** 进入加注面板（并清空直接操作的选中态） */
+function enterRaise() {
+  selected.value = null;
+  mode.value = 'raise';
+}
+
 function confirmRaise() {
   store.act('raise', raiseTo.value);
 }
@@ -80,54 +100,62 @@ function confirmRaise() {
     <div v-if="legal" class="bet-panel">
       <div class="countdown"><div class="bar" :style="{ width: `${deadlinePct}%` }" /></div>
 
-      <div class="panel-row">
-        <button class="danger act" @click="store.act('fold')">弃牌</button>
-        <button v-if="legal.canCheck" class="ghost act" @click="store.act('check')">过牌</button>
-        <button v-else class="ok act" @click="store.act('call')">
-          跟注 {{ formatChips(legal.callAmount) }}
-        </button>
-        <button v-if="legal.canRaise && mode === 'actions'" class="act raise-btn" @click="mode = 'raise'">
-          加注 ▲
-        </button>
-      </div>
-
-      <template v-if="legal.canRaise && mode === 'raise'">
-        <div class="presets">
-          <button
-            v-for="p in presets"
-            :key="p.label"
-            class="preset-card"
-            :class="{ active: raiseTo === p.value }"
-            @click="setRaise(p.value)"
-          >
-            <span class="preset-label">{{ p.label }}</span>
-            <span class="preset-value">{{ formatChips(p.value) }}</span>
+      <div class="panel-body">
+        <div class="panel-row">
+          <span class="act-wrap" :class="{ selected: selected === 'fold' }">
+            <button class="danger act" @click="tryAct('fold')">弃牌</button>
+            <i class="corner tl" /><i class="corner tr" /><i class="corner bl" /><i class="corner br" />
+          </span>
+          <span class="act-wrap" :class="{ selected: selected === (legal.canCheck ? 'check' : 'call') }">
+            <button v-if="legal.canCheck" class="ghost act" @click="tryAct('check')">过牌</button>
+            <button v-else class="ok act" @click="tryAct('call')">
+              跟注 {{ formatChips(legal.callAmount) }}
+            </button>
+            <i class="corner tl" /><i class="corner tr" /><i class="corner bl" /><i class="corner br" />
+          </span>
+          <button v-if="legal.canRaise && mode === 'actions'" class="act raise-btn" @click="enterRaise">
+            加注 ▲
           </button>
         </div>
 
-        <div class="slider-row">
-          <span class="bound">{{ formatChips(legal.minRaiseTo) }}</span>
-          <input
-            type="range"
-            :min="legal.minRaiseTo"
-            :max="legal.maxRaiseTo"
-            :step="step"
-            :value="raiseTo"
-            @input="setRaise(Number(($event.target as HTMLInputElement).value))"
-          />
-          <span class="bound">{{ formatChips(legal.maxRaiseTo) }}</span>
-        </div>
-
-        <div class="confirm-row">
-          <div class="amount-display">
-            加注到 <strong>{{ formatChips(raiseTo) }}</strong>
-            <span class="raise-extra">（再投入 {{ formatChips(extraTo) }}）</span>
-            <span v-if="raiseTo === legal.maxRaiseTo" class="allin-hint">ALL-IN!</span>
+        <template v-if="legal.canRaise && mode === 'raise'">
+          <div class="presets">
+            <button
+              v-for="p in presets"
+              :key="p.label"
+              class="preset-card"
+              :class="{ active: raiseTo === p.value }"
+              @click="setRaise(p.value)"
+            >
+              <span class="preset-label">{{ p.label }}</span>
+              <span class="preset-value">{{ formatChips(p.value) }}</span>
+            </button>
           </div>
-          <button class="ok act" @click="confirmRaise">确认加注</button>
-          <button class="ghost act small" @click="mode = 'actions'">返回</button>
-        </div>
-      </template>
+
+          <div class="slider-row">
+            <span class="bound">{{ formatChips(legal.minRaiseTo) }}</span>
+            <input
+              type="range"
+              :min="legal.minRaiseTo"
+              :max="legal.maxRaiseTo"
+              :step="step"
+              :value="raiseTo"
+              @input="setRaise(Number(($event.target as HTMLInputElement).value))"
+            />
+            <span class="bound">{{ formatChips(legal.maxRaiseTo) }}</span>
+          </div>
+
+          <div class="confirm-row">
+            <div class="amount-display">
+              加注到 <strong>{{ formatChips(raiseTo) }}</strong>
+              <span class="raise-extra">（再投入 {{ formatChips(extraTo) }}）</span>
+              <span v-if="raiseTo === legal.maxRaiseTo" class="allin-hint">ALL-IN!</span>
+            </div>
+            <button class="ok act" @click="confirmRaise">确认加注</button>
+            <button class="ghost act small" @click="mode = 'actions'">返回</button>
+          </div>
+        </template>
+      </div>
     </div>
   </transition>
 </template>
@@ -139,6 +167,7 @@ function confirmRaise() {
   margin: 0 auto calc(10px + env(safe-area-inset-bottom, 0px));
   flex-shrink: 0;
   z-index: 40;
+  position: relative;
   background: var(--panel);
   border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 18px;
@@ -165,6 +194,52 @@ function confirmRaise() {
   display: flex;
   gap: 12px;
   justify-content: center;
+}
+.panel-body {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+/* 四角包裹选中态：首次点击操作按钮后出现，再次点击同一按钮才触发 */
+.act-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.act-wrap .corner {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.act-wrap .corner.tl {
+  top: -4px;
+  left: -4px;
+  border-top: 2px solid #3a86ff;
+  border-left: 2px solid #3a86ff;
+}
+.act-wrap .corner.tr {
+  top: -4px;
+  right: -4px;
+  border-top: 2px solid #3a86ff;
+  border-right: 2px solid #3a86ff;
+}
+.act-wrap .corner.bl {
+  bottom: -4px;
+  left: -4px;
+  border-bottom: 2px solid #3a86ff;
+  border-left: 2px solid #3a86ff;
+}
+.act-wrap .corner.br {
+  bottom: -4px;
+  right: -4px;
+  border-bottom: 2px solid #3a86ff;
+  border-right: 2px solid #3a86ff;
+}
+.act-wrap.selected .corner {
+  opacity: 1;
 }
 .act {
   padding: 12px 26px;
@@ -284,6 +359,9 @@ input[type='range']::-webkit-slider-thumb {
   }
   .panel-row {
     gap: 8px;
+  }
+  .act-wrap {
+    flex: 1;
   }
   .act {
     flex: 1;

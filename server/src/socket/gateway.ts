@@ -261,6 +261,14 @@ export function attachGateway(io: IO, manager: RoomManager): void {
     );
 
     socket.on(
+      EV.GameRevealBot,
+      wrap((p: { seatIndex: number; cardIndex: number }, cb: (r: { ok: true } | ApiError) => void) => {
+        roomOf().revealBotCard(session.playerId, p.seatIndex, p.cardIndex);
+        cb({ ok: true });
+      }),
+    );
+
+    socket.on(
       EV.EmojiThrow,
       wrap((p: { toSeatIndex: number; emoji: string }, cb: (r: { ok: true } | ApiError) => void) => {
         roomOf().throwEmoji(session.playerId, p.toSeatIndex, p.emoji);

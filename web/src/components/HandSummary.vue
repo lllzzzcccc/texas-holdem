@@ -29,10 +29,37 @@ function isShowdown(seatIndex: number): boolean {
   return showdownSeats.value.has(seatIndex);
 }
 
-/** 只有本人能亮/盖自己的牌（摊牌亮出的除外），点哪张切换哪张 */
+/** 目标座位是否为 AI 玩家 */
+function isBot(seatIndex: number): boolean {
+  return store.room?.seats[seatIndex]?.isBot ?? false;
+}
+
+/** 该座位的牌是否可点击：本人（非摊牌）可亮/盖，房主可翻开 AI 的牌 */
+function canClick(seatIndex: number): boolean {
+  if (isOwn(seatIndex)) return !isShowdown(seatIndex);
+  return store.isHost && isBot(seatIndex) && !isShowdown(seatIndex);
+}
+
+function cardTitle(seatIndex: number, cardIndex: number): string {
+  if (isOwn(seatIndex) && !isShowdown(seatIndex)) {
+    return isPublic(seatIndex, cardIndex) ? '点击盖上这张牌' : '点击亮出这张牌（所有人可见）';
+  }
+  if (store.isHost && isBot(seatIndex) && !isShowdown(seatIndex)) {
+    return isPublic(seatIndex, cardIndex) ? '点击盖上 AI 的这张牌' : '点击翻开 AI 的这张牌（所有人可见）';
+  }
+  return '';
+}
+
+/** 本人亮/盖自己的牌；房主可翻开/盖回 AI 玩家的牌（点击逐张切换） */
 function clickCard(seatIndex: number, cardIndex: number) {
-  if (!isOwn(seatIndex) || showdownSeats.value.has(seatIndex)) return;
-  store.showCard(cardIndex);
+  if (isOwn(seatIndex)) {
+    if (isShowdown(seatIndex)) return;
+    store.showCard(cardIndex);
+    return;
+  }
+  if (store.isHost && isBot(seatIndex) && !isShowdown(seatIndex)) {
+    store.revealBot(seatIndex, cardIndex);
+  }
 }
 
 interface Row {
@@ -42,6 +69,8 @@ interface Row {
   folded: boolean;
   committed: number;
   award: number;
+  /** 净赢 = 赢得的底池 − 本手累计投入 */
+  net: number;
   handName: string | null;
   isWinner: boolean;
 }
@@ -60,6 +89,7 @@ const rows = computed<Row[]>(() => {
         folded: s!.hasFolded,
         committed: s!.committed,
         award: a?.amount ?? 0,
+        net: a ? a.amount - s!.committed : 0,
         handName: a?.handName ?? null,
         isWinner: !!a && a.amount > 0,
       };
@@ -100,21 +130,15 @@ const gameOver = computed(() => store.room?.status === 'lobby');
               <div class="r-cards">
                 <template v-if="r.cards.length > 0">
                   <!--
-                    本人未公开的牌：虚化的正面（自己认得但别人看不到），点击逐张亮出；
-                    已亮出的牌再点击可盖上；摊牌亮出的牌是公开信息，不可盖上
+                    本人未公开的牌：虚化的正面（自己认得但别人看不到），点击逐张亮/盖；
+                    摊牌亮出的牌是公开信息，不可盖上；房主可点击翻开 AI 玩家盖着的牌
                   -->
                   <div
                     v-for="(c, i) in r.cards"
                     :key="i"
                     class="card-click"
-                    :class="{ clickable: isOwn(r.seatIndex) && !isShowdown(r.seatIndex) }"
-                    :title="
-                      isOwn(r.seatIndex) && !isShowdown(r.seatIndex)
-                        ? isPublic(r.seatIndex, i)
-                          ? '点击盖上这张牌'
-                          : '点击亮出这张牌（所有人可见）'
-                        : ''
-                    "
+                    :class="{ clickable: canClick(r.seatIndex) }"
+                    :title="cardTitle(r.seatIndex, i)"
                     @click="clickCard(r.seatIndex, i)"
                   >
                     <div class="card-veil" :class="{ veiled: isOwn(r.seatIndex) && !isPublic(r.seatIndex, i) }">
@@ -128,6 +152,7 @@ const gameOver = computed(() => store.room?.status === 'lobby');
             <div class="r-result">
               <template v-if="r.isWinner">
                 <div class="r-win">+{{ formatChips(r.award) }}</div>
+                <div class="r-net">收益 +{{ formatChips(r.net) }}</div>
                 <div v-if="r.handName" class="r-hand">{{ r.handName }}</div>
               </template>
               <template v-else>
@@ -285,6 +310,11 @@ const gameOver = computed(() => store.room?.status === 'lobby');
   font-size: 17px;
   font-weight: 900;
   color: #ffd966;
+}
+.r-net {
+  font-size: 12px;
+  font-weight: 700;
+  color: #6fd08c;
 }
 .r-hand {
   font-size: 12px;

@@ -389,7 +389,8 @@ const drawTip = computed(() => {
 
 .deck-anchor {
   position: absolute;
-  left: calc(50% + 220px);
+  /* 牌堆在公共牌右侧，与第 5 张公共牌框保持约 40px 间距，避免紧贴 */
+  left: calc(50% + 262px);
   top: 50%;
   transform: translate(-50%, -50%);
   width: 58px;

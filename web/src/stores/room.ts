@@ -11,7 +11,7 @@ import type {
   RoomSummary,
 } from '@th/shared';
 import { EV } from '@th/shared';
-import { emitAck, saveNickname, savePlayerId, socket } from '../socket';
+import { emitAck, saveNickname, savedNickname, savePlayerId, socket } from '../socket';
 import { enqueueGameEvent, queueIdle, resetAnimation } from '../anim/queue';
 import { sfx } from '../utils/sound';
 
@@ -148,6 +148,9 @@ export const useRoomStore = defineStore('room', {
       socketWired = true;
       socket.on('connect', () => {
         this.socketConnected = true;
+        // 断线后 socket 自动重连（如移动端切去微信再回来）：这是新连接、服务端 session 已清空，
+        // 必须凭本地身份令牌静默重回房间，否则后续任何操作都会报「你还未加入房间」。
+        if (this.joined) void this.rejoinRoom();
       });
       socket.on('disconnect', () => {
         this.socketConnected = false;
@@ -223,10 +226,8 @@ export const useRoomStore = defineStore('room', {
       this.drawnSeats = g?.dealerDraw?.draws.map((d) => d.seatIndex) ?? [];
       this.drawRevealed = !!g?.dealerDraw?.dealerSeat;
       this.currentHand = g?.handNumber ?? 0;
-      // 快照/重连没有发牌动画：本人仍手持底牌且未弃牌就直接亮牌
-      const mine = state.seats.find((s) => s?.playerId === this.playerId);
-      this.cardsVisible =
-        state.status === 'playing' && !!mine && (mine.holeCards?.length ?? 0) > 0 && !mine.hasFolded;
+      // 快照/重连没有发牌动画，但底牌默认保持收起（用户可点「查看手牌」自行展开）
+      this.cardsVisible = false;
     },
 
     /** 闸门上界与状态对齐（防止动画遗漏导致卡在不一致画面） */
@@ -310,6 +311,12 @@ export const useRoomStore = defineStore('room', {
     async joinRoom(roomCode: string, nickname: string, playerId?: string, password?: string): Promise<true | ApiErr> {
       this.joining = true;
       saveNickname(nickname);
+      // 先清空旧状态再发起加入/重连：重连时服务端 addPlayer 会补发 yourTurn，
+      // 若等 ack 返回后再 resetForRoom 会把刚收到的 yourTurn 一并清掉，导致刷新后行动面板消失。
+      this.resetForRoom();
+      // 重连时先用本地令牌占位 playerId：服务端在 ack 前后都会广播 room:state，
+      // 若此刻 playerId 仍为空，RoomState 处理器会误判「不轮到我」而清掉刚补发的 yourTurn。
+      if (playerId) this.playerId = playerId;
       const r = await emitAck<
         { roomCode: string; nickname: string; playerId?: string; password?: string },
         { playerId: string; roomCode: string; state: RoomState } | ApiErr
@@ -321,11 +328,35 @@ export const useRoomStore = defineStore('room', {
       }
       this.playerId = r.playerId;
       savePlayerId(r.roomCode, r.playerId);
-      this.resetForRoom();
       this.room = r.state;
       this.snapGates(r.state);
       this.joined = true;
       return true;
+    },
+
+    /** 断线后 socket 自动重连：凭已保存的身份令牌静默重回房间，恢复服务端会话。
+     *  移动端切后台（如切去微信）会让 socket 断开，回来后是新连接、服务端 session 为空，
+     *  若不重连，后续任何操作都会报「你还未加入房间」。这里不 resetForRoom，保持画面连续。 */
+    async rejoinRoom() {
+      if (!this.joined || !this.room || !this.playerId) return;
+      const nick =
+        savedNickname() || this.room.seats.find((s) => s?.playerId === this.playerId)?.nickname || '';
+      if (!nick) return;
+      const r = await emitAck<
+        { roomCode: string; nickname: string; playerId?: string; password?: string },
+        { playerId: string; roomCode: string; state: RoomState } | ApiErr
+      >(EV.RoomJoin, { roomCode: this.room.code, nickname: nick, playerId: this.playerId });
+      if (isErr(r)) {
+        this.toast(r.message);
+        // 房间已解散等不可恢复情况：清空本地状态，页面层据此引导回大厅
+        if (r.code === 'ROOM_NOT_FOUND') this.resetForRoom();
+        return;
+      }
+      this.playerId = r.playerId;
+      savePlayerId(r.roomCode, r.playerId);
+      this.room = r.state;
+      this.snapGates(r.state);
+      this.joined = true;
     },
 
     async takeSeat(seatIndex: number, buyIn: number): Promise<boolean> {
@@ -418,6 +449,13 @@ export const useRoomStore = defineStore('room', {
     /** 结算阶段亮出自己的一张底牌 */
     showCard(cardIndex: number) {
       socket.emit(EV.GameShowCard, { cardIndex }, (r: { ok: true } | ApiErr) => {
+        if (isErr(r)) this.toast(r.message);
+      });
+    },
+
+    /** 结算阶段：房主翻开 AI 玩家的一张底牌 */
+    revealBot(seatIndex: number, cardIndex: number) {
+      socket.emit(EV.GameRevealBot, { seatIndex, cardIndex }, (r: { ok: true } | ApiErr) => {
         if (isErr(r)) this.toast(r.message);
       });
     },

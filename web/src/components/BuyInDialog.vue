@@ -5,10 +5,10 @@ import { formatChips } from '../utils/chips';
 
 const props = defineProps<{
   open: boolean;
-  /** 模式：买入入座 / 补码 / 放置 AI */
-  mode: 'buyin' | 'rebuy' | 'bot';
+  /** 模式：买入入座 / 补码 / 房主选择筹码（底部含「自己入座 / AI 玩家」两个选项） */
+  mode: 'buyin' | 'rebuy' | 'seat';
 }>();
-const emit = defineEmits<{ confirm: [amount: number]; close: [] }>();
+const emit = defineEmits<{ confirm: [amount: number]; bot: [amount: number]; close: [] }>();
 
 const store = useRoomStore();
 const amount = ref(2000);
@@ -28,18 +28,15 @@ const bbCount = computed(() => (amount.value / bb.value).toFixed(0));
 const presets = computed(() => [1000, 2000, 4000].filter((v) => v >= min.value && v <= max.value));
 
 const titleText = computed(() => {
-  if (props.mode === 'buyin') return '购买积分入座';
-  if (props.mode === 'bot') return '放置 AI 玩家';
-  return '补充积分';
+  if (props.mode === 'rebuy') return '补充积分';
+  if (props.mode === 'seat') return '选择筹码';
+  return '购买积分入座';
 });
-const confirmText = computed(() => {
-  if (props.mode === 'buyin') return '确认入座';
-  if (props.mode === 'bot') return '确认放置';
-  return '确认补码';
+const confirmText = computed(() => (props.mode === 'rebuy' ? '确认补码' : '确认入座'));
+const hintText = computed(() => {
+  if (props.mode === 'seat') return '选好筹码后，选择自己入座或放置 AI 玩家';
+  return '积分全部为虚拟积分，仅供游戏计分使用';
 });
-const hintText = computed(() =>
-  props.mode === 'bot' ? 'AI 入座后由系统自动出牌' : '积分全部为虚拟积分，仅供游戏计分使用',
-);
 </script>
 
 <template>
@@ -78,10 +75,15 @@ const hintText = computed(() =>
         </div>
 
         <div class="actions">
-          <button class="ghost" @click="emit('close')">取消</button>
-          <button class="ok" @click="emit('confirm', amount)">
-            {{ confirmText }}
-          </button>
+          <template v-if="mode === 'seat'">
+            <button class="action-btn" @click="emit('confirm', amount)">自己入座</button>
+            <button class="action-btn" @click="emit('bot', amount)">AI 玩家</button>
+            <button class="action-btn" @click="emit('close')">取消</button>
+          </template>
+          <template v-else>
+            <button class="ghost" @click="emit('close')">取消</button>
+            <button class="ok" @click="emit('confirm', amount)">{{ confirmText }}</button>
+          </template>
         </div>
       </div>
     </div>
@@ -164,6 +166,19 @@ const hintText = computed(() =>
   gap: 12px;
   justify-content: center;
   margin-top: 6px;
+  flex-wrap: wrap;
+}
+/* 底部操作按钮：与上方筹码预设（ghost 半透明）区分，用实色填充 + 描边 */
+.actions .action-btn {
+  flex: 1;
+  padding: 7px 10px;
+  background: #25425e;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  box-shadow: none;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0;
 }
 .fade-enter-active,
 .fade-leave-active {

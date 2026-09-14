@@ -11,6 +11,9 @@ services:
       PORT: 3000
       HOST: 0.0.0.0
       PUBLIC_URL: ${PUBLIC_URL:-https://chammmsblog.site/texas-holdem}
+      AI_API_KEY: ${AI_API_KEY:-}
+      AI_BASE_URL: ${AI_BASE_URL:-https://api.deepseek.com/anthropic}
+      AI_MODEL: ${AI_MODEL:-deepseek-v4-flash}
 
   nginx:
     image: nginx:1.27-alpine

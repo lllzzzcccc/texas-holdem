@@ -587,6 +587,18 @@ export class Room {
     this.hooks.emitState();
   }
 
+  /** 结算阶段：房主翻开 AI 玩家的一张底牌（翻出后全员可见） */
+  revealBotCard(hostPlayerId: string, seatIndex: number, cardIndex: number): void {
+    if (hostPlayerId !== this.hostId) throw new Error('只有房主可以翻开 AI 的牌');
+    if (!this.engine || !this.engine.isHandEnded) throw new Error('手牌结束后才能翻牌');
+    const seat = this.seats[seatIndex];
+    if (!seat) throw new Error('该座位没有玩家');
+    const p = this.players.get(seat.playerId);
+    if (!p?.isBot) throw new Error('只能翻开 AI 玩家的牌');
+    this.engine.toggleHole(seatIndex, cardIndex);
+    this.hooks.emitState();
+  }
+
   /** 表情投掷冷却（playerId → 上次投掷时间戳） */
   private lastEmojiAt = new Map<string, number>();
   /** 弹幕冷却（playerId → 上次发送时间戳） */

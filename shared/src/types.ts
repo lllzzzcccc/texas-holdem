@@ -219,6 +219,7 @@ export const EV = {
   GameNextHand: 'game:nextHand',
   GameDrawCard: 'game:drawCard',
   GameShowCard: 'game:showCard',
+  GameRevealBot: 'game:revealBot',
   EmojiThrow: 'emoji:throw',
   DanmakuSend: 'danmaku:send',
   LobbyList: 'hall:list',
@@ -327,6 +328,11 @@ export interface ClientToServerEvents {
   [EV.GameDrawCard]: (p: { deckIndex: number }, cb: (r: { ok: true } | ApiError) => void) => void;
   /** 结算阶段亮出自己的一张底牌（0 或 1），亮出后所有人可见 */
   [EV.GameShowCard]: (p: { cardIndex: number }, cb: (r: { ok: true } | ApiError) => void) => void;
+  /** 结算阶段房主翻开 AI 玩家的一张底牌，翻出后所有人可见 */
+  [EV.GameRevealBot]: (
+    p: { seatIndex: number; cardIndex: number },
+    cb: (r: { ok: true } | ApiError) => void,
+  ) => void;
   /** 向某个座位投掷表情（点击该座位头像后选择） */
   [EV.EmojiThrow]: (p: { toSeatIndex: number; emoji: string }, cb: (r: { ok: true } | ApiError) => void) => void;
   /** 发送一条弹幕 */

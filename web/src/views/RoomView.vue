@@ -10,7 +10,6 @@ import PokerTable from '../components/table/PokerTable.vue';
 import PlayingCard from '../components/table/PlayingCard.vue';
 import BetPanel from '../components/table/BetPanel.vue';
 import BuyInDialog from '../components/BuyInDialog.vue';
-import SeatActionMenu from '../components/SeatActionMenu.vue';
 import QrInvite from '../components/QrInvite.vue';
 import HandSummary from '../components/HandSummary.vue';
 import ActionLog from '../components/ActionLog.vue';
@@ -28,9 +27,8 @@ const store = useRoomStore();
 
 const nickname = ref(savedNickname());
 const buyInOpen = ref(false);
-const buyInMode = ref<'buyin' | 'rebuy' | 'bot'>('buyin');
+const buyInMode = ref<'buyin' | 'rebuy' | 'seat'>('buyin');
 const chosenPos = ref(0);
-const seatMenuOpen = ref(false);
 const qrOpen = ref(false);
 const settingsOpen = ref(false);
 const dissolveOpen = ref(false);
@@ -328,39 +326,25 @@ async function joinWithNickname() {
 
 function onSit(pos: number) {
   chosenPos.value = pos;
-  // 房主：弹出「入座 / 放置 AI」选择；普通玩家：直接买入入座
-  if (store.isHost) {
-    seatMenuOpen.value = true;
-  } else {
-    buyInMode.value = 'buyin';
-    buyInOpen.value = true;
-  }
-}
-
-function onChooseBuyin() {
-  seatMenuOpen.value = false;
-  buyInMode.value = 'buyin';
-  buyInOpen.value = true;
-}
-
-function onChooseBot() {
-  seatMenuOpen.value = false;
-  buyInMode.value = 'bot';
+  // 点击空座位直接弹出选择筹码面板；房主面板底部额外提供「自己入座 / AI 玩家」两个选项
+  buyInMode.value = store.isHost ? 'seat' : 'buyin';
   buyInOpen.value = true;
 }
 
 async function confirmBuyIn(amount: number) {
-  if (buyInMode.value === 'buyin') {
-    // 展示位置即实际座位号（不旋转，坐哪就是哪）
-    const ok = await store.takeSeat(chosenPos.value, amount);
-    if (ok) buyInOpen.value = false;
-  } else if (buyInMode.value === 'bot') {
-    const ok = await store.addBot(chosenPos.value, amount);
-    if (ok) buyInOpen.value = false;
-  } else {
+  if (buyInMode.value === 'rebuy') {
     await store.rebuy(amount);
     buyInOpen.value = false;
+    return;
   }
+  // buyin（普通玩家入座）或 seat（房主选择「自己入座」）
+  const ok = await store.takeSeat(chosenPos.value, amount);
+  if (ok) buyInOpen.value = false;
+}
+
+async function confirmBot(amount: number) {
+  const ok = await store.addBot(chosenPos.value, amount);
+  if (ok) buyInOpen.value = false;
 }
 
 function openRebuy() {
@@ -623,13 +607,12 @@ function confirmLeave() {
     </transition>
 
     <!-- 弹层 -->
-    <BuyInDialog :open="buyInOpen" :mode="buyInMode" @confirm="confirmBuyIn" @close="buyInOpen = false" />
-    <SeatActionMenu
-      :open="seatMenuOpen"
-      :seat-index="chosenPos"
-      @buyin="onChooseBuyin"
-      @bot="onChooseBot"
-      @close="seatMenuOpen = false"
+    <BuyInDialog
+      :open="buyInOpen"
+      :mode="buyInMode"
+      @confirm="confirmBuyIn"
+      @bot="confirmBot"
+      @close="buyInOpen = false"
     />
     <QrInvite :open="qrOpen" :url="store.inviteUrl" :code="store.room?.code ?? ''" @close="qrOpen = false" />
     <RoomSettingsDialog :open="settingsOpen" @close="settingsOpen = false" />
@@ -837,10 +820,10 @@ function confirmLeave() {
   pointer-events: none;
   will-change: transform, opacity;
 }
-/* 展开的底牌放大显示 */
+/* 展开的底牌放大显示（宽屏；小屏在下方 @media 覆盖为更小尺寸） */
 .co-cards :deep(.card) {
-  --w: 92px;
-  --h: 127px;
+  --w: 110px;
+  --h: 152px;
 }
 
 .table-zone {
