@@ -9,6 +9,7 @@ import type { ClientToServerEvents, ServerToClientEvents } from '@th/shared';
 import { config } from './config.js';
 import { RoomManager } from './rooms/RoomManager.js';
 import { attachGateway } from './socket/gateway.js';
+import { initHistoryRecorder } from './history/recorder.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -24,6 +25,12 @@ export function createApp() {
   });
   const manager = new RoomManager();
   attachGateway(io, manager);
+  // 对局记录持久化（JSONL 落盘；目录不可写时仅告警，不阻断服务启动）
+  try {
+    initHistoryRecorder(config.historyDir);
+  } catch (e) {
+    console.warn('[history] 初始化落盘目录失败，对局记录将被停用', e);
+  }
 
   // 健康检查：带前缀与不带前缀都可用（不带前缀供 Docker HEALTHCHECK / deploy.sh 使用）
   const health = (_req: express.Request, res: express.Response) => {

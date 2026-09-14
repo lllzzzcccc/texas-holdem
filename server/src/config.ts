@@ -1,7 +1,11 @@
+import path from 'node:path';
+
 export const config = {
   port: Number(process.env.PORT ?? 3000),
   host: process.env.HOST ?? '0.0.0.0',
   publicUrl: process.env.PUBLIC_URL ?? 'http://localhost:3000',
+  /** 对局记录 JSONL 落盘目录（每房间一个 <code>.jsonl） */
+  historyDir: process.env.HISTORY_DIR?.trim() || path.resolve(process.cwd(), 'data/history'),
   /** 每回合行动时限 */
   turnTimeoutMs: Number(process.env.TURN_TIMEOUT_MS ?? 30_000),
   /** 一手结束后自动开下一手的间隔（留给动画播放） */

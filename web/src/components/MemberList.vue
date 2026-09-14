@@ -87,7 +87,7 @@ function confirmKick() {
 }
 .member-panel {
   position: absolute;
-  top: 52px;
+  top: 56px;
   left: 12px;
   width: min(280px, calc(100vw - 24px));
   max-height: 70dvh;

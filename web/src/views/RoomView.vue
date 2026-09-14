@@ -111,14 +111,20 @@ const actionOpen = computed(() => !!store.yourTurn);
 
 /** 下注街阶段集合：仅这些阶段本人会需要翻看自己的底牌 */
 const CARD_VIEW_PHASES = new Set(['preflop', 'flop', 'turn', 'river']);
-/** 是否显示左下角「看牌」按钮：本人在当前手牌中、未弃牌、还持有底牌 */
+/** 是否显示左下角「看牌」按钮：本人在当前手牌中、还持有底牌（弃牌后仍显示，但整体置灰） */
 const canViewCards = computed(() => {
   const g = store.room?.game;
   const mySeat = store.mySeat;
   if (!g || store.room?.status !== 'playing' || mySeat === null) return false;
   if (!CARD_VIEW_PHASES.has(g.phase)) return false;
   const seat = store.room.seats[mySeat];
-  return !!seat && !seat.hasFolded && store.holeCards.length > 0;
+  return !!seat && store.holeCards.length > 0;
+});
+/** 我是否已弃牌：弃牌后左下角图标与展开的底牌整体置灰，表示这两张牌已弃掉 */
+const iFolded = computed(() => {
+  const mySeat = store.mySeat;
+  if (!store.room || mySeat === null) return false;
+  return store.room.seats[mySeat]?.hasFolded ?? false;
 });
 
 const peekFab = ref<HTMLElement | null>(null);
@@ -416,24 +422,26 @@ function confirmLeave() {
     <!-- 顶栏 -->
     <header class="topbar">
       <div class="left">
-        <span class="room-code">
-          房间
-          <strong class="code-clickable" title="点击复制房间号" @click="copyCode">{{ store.room?.code }}</strong>
-          <span v-if="store.room?.isPrivate" class="priv-tag" title="私密房间：不出现在大厅，仅凭邀请加入">🔒</span>
-        </span>
-        <span v-if="store.isHost" class="host-tag" title="你是房主">房主</span>
-        <span class="blinds">盲注 {{ store.room?.smallBlind }}/{{ store.room?.bigBlind }}</span>
+        <div class="left-row">
+          <span class="room-code">
+            房间
+            <strong class="code-clickable" title="点击复制房间号" @click="copyCode">{{ store.room?.code }}</strong>
+            <span v-if="store.room?.isPrivate" class="priv-tag" title="私密房间：不出现在大厅，仅凭邀请加入">🔒</span>
+          </span>
+          <span v-if="store.isHost" class="host-tag" title="你是房主">房主</span>
+          <span class="blinds">盲注 {{ store.room?.smallBlind }}/{{ store.room?.bigBlind }}</span>
+          <span v-if="store.room?.game?.handNumber" class="hand-no">
+            第 {{ store.room.game.handNumber }}{{ store.room.maxHands > 0 ? `/${store.room.maxHands}` : '' }} 手
+          </span>
+        </div>
         <button
           class="member-count"
           :class="{ active: membersOpen }"
           :title="`在座 ${store.humanSeatedCount} 人 · 观战 ${store.room?.spectators.length ?? 0} 人`"
           @click="membersOpen = !membersOpen"
         >
-          👥 {{ store.humanSeatedCount + (store.room?.spectators.length ?? 0) }}
+          👤 {{ store.humanSeatedCount + (store.room?.spectators.length ?? 0) }}
         </button>
-        <span v-if="store.room?.game?.handNumber" class="hand-no">
-          第 {{ store.room.game.handNumber }}{{ store.room.maxHands > 0 ? `/${store.room.maxHands}` : '' }} 手
-        </span>
       </div>
       <div class="right">
         <button class="ghost sm menu-toggle" @click.stop="menuOpen = !menuOpen">{{ menuOpen ? '✕' : '☰' }}</button>
@@ -491,7 +499,7 @@ function confirmLeave() {
       v-if="canViewCards"
       ref="peekFab"
       class="peek-fab"
-      :class="{ active: store.cardsVisible }"
+      :class="{ active: store.cardsVisible, folded: iFolded }"
       :style="peekStyle"
       aria-label="查看我的底牌"
       @click="store.toggleCards()"
@@ -531,7 +539,12 @@ function confirmLeave() {
 
     <!-- 我的底牌：最顶层浮层，从图标翻牌放大到屏幕下方，点击任意位置收起（收起逻辑见 onDocClick） -->
     <transition :css="false" @enter="onCardsEnter" @leave="onCardsLeave">
-      <div v-if="canViewCards && store.cardsVisible" ref="cardOverlay" class="card-overlay">
+      <div
+        v-if="canViewCards && store.cardsVisible"
+        ref="cardOverlay"
+        class="card-overlay"
+        :class="{ folded: iFolded }"
+      >
         <div class="co-cards">
           <PlayingCard v-for="(c, i) in store.holeCards" :key="i" :card="c" face-up size="normal" />
         </div>
@@ -660,9 +673,22 @@ function confirmLeave() {
   gap: 10px;
   align-items: center;
 }
+/* 左侧信息两行排布：第一行房间号/房主/盲注/手数，第二行人数按钮 */
+.left {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+.left-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
 .room-code {
   color: var(--text-dim);
   font-size: 14px;
+  line-height: 20px;
 }
 .room-code strong {
   color: var(--gold);
@@ -685,29 +711,33 @@ function confirmLeave() {
   font-weight: 700;
   color: #3a2c00;
   background: linear-gradient(180deg, #ffd700, #b8860b);
-  padding: 2px 8px;
+  padding: 0 8px;
   border-radius: 6px;
   margin-left: 2px;
-  line-height: 1.2;
+  line-height: 16px;
 }
 .blinds,
 .hand-no {
   font-size: 12px;
   color: var(--text-dim);
   background: rgba(255, 255, 255, 0.07);
-  padding: 3px 10px;
+  padding: 0 10px;
   border-radius: 8px;
+  line-height: 20px;
+}
+.blinds {
+  line-height: 18px;
 }
 .member-count {
-  font-size: 12px;
+  font-size: 11px;
   font-family: inherit;
   color: var(--accent);
   background: rgba(76, 201, 240, 0.12);
   border: 1px solid rgba(76, 201, 240, 0.3);
-  padding: 3px 10px;
+  padding: 2px 8px;
   border-radius: 8px;
   cursor: pointer;
-  line-height: 1.4;
+  line-height: 1.2;
 }
 .member-count:hover,
 .member-count.active {
@@ -800,6 +830,12 @@ function confirmLeave() {
 /* 展开后：图标变为正面图案，整体模糊化 */
 .peek-v.revealed {
   filter: blur(3.5px);
+}
+/* 已弃牌：左下角图标与展开的底牌整体置灰，表示这两张牌已被弃掉 */
+.peek-fab.folded,
+.card-overlay.folded {
+  filter: grayscale(1);
+  opacity: 0.55;
 }
 
 /* 我的底牌：最顶层浮层，浮于下注栏等组件之上，不占用布局空间 */
@@ -1053,11 +1089,11 @@ function confirmLeave() {
   .blinds,
   .hand-no {
     font-size: 11px;
-    padding: 2px 8px;
+    padding: 0 8px;
   }
   .host-tag {
     font-size: 10px;
-    padding: 1px 6px;
+    padding: 0 6px;
     border-radius: 5px;
   }
   .menu-toggle {

@@ -307,6 +307,18 @@ const drawTip = computed(() => {
   --card-h: 80px;
   --slot-pad: 12px;
 }
+/* 容器查询可用时：公共牌随牌桌等比缩放（加注面板出现或窄屏时牌桌变小，牌跟着缩小，
+   避免公共牌与左右头像重叠、也避免牌桌缩了而公共牌不缩的割裂感）。
+   牌桌宽 = min(1240px, 96cqw, 92cqh×1.7857)，牌宽取 4.68% 牌桌宽，故按三者取最小并封顶 58px；
+   牌高同比例 80/58，虚线框与间距亦同比例缩放。 */
+@supports (width: 1cqh) {
+  .board {
+    gap: min(0.62cqw, 1.06cqh, 8px);
+    --card-w: min(4.5cqw, 7.7cqh, 58px);
+    --card-h: min(6.2cqw, 10.6cqh, 80px);
+    --slot-pad: min(0.93cqw, 1.6cqh, 12px);
+  }
+}
 /* 公共牌沿用牌桌的尺寸变量，牌永远比虚线框小一圈 */
 .board :deep(.card) {
   --w: var(--card-w);
@@ -473,12 +485,6 @@ const drawTip = computed(() => {
 @media (max-width: 640px) {
   .table-outer {
     --seat-scale: 0.72;
-  }
-  .board {
-    gap: 5px;
-    --card-w: 46px;
-    --card-h: 64px;
-    --slot-pad: 11px;
   }
   .board-hint {
     font-size: 18px;

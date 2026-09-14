@@ -28,6 +28,8 @@ import { config } from '../config.js';
 import { requestDecision } from '../ai/client.js';
 import { buildPrompt, type PromptContext } from '../ai/prompt.js';
 import type { BotDecision } from '../ai/types.js';
+import { recordHistory } from '../history/recorder.js';
+import type { HistoryPayload, HistoryRecord } from '../history/types.js';
 
 export interface Player {
   id: string;
@@ -136,6 +138,14 @@ export class Room {
   private rebuyTimer: NodeJS.Timeout | null = null;
   /** finalizeHand 结算中标记：抑制 reconcile 的自动判定，避免与统一结算逻辑冲突 */
   private reconcilingHand = false;
+
+  // ---------- 对局记录 ----------
+  /** 本房间对局记录的唯一标识（随机 UUID，跨手稳定） */
+  private matchId = randomUUID();
+  /** 是否已记录 room_ended（幂等，保证每场对局只记一次终局快照） */
+  private matchEndRecorded = false;
+  /** 每手发牌后：座位 → 两张底牌（供 hand_result 落盘，含弃牌者） */
+  private holeCardsBySeat = new Map<number, CardStr[]>();
 
   constructor(code: string, hostId: string, hooks: RoomHooks, options: CreateRoomOptions = {}) {
     this.code = code;
@@ -476,6 +486,27 @@ export class Room {
     this.status = 'playing';
     this.handNumber = 0;
     this.seq = 0;
+    this.matchEndRecorded = false;
+
+    // 开局快照落盘（对局记录）
+    this.record({
+      type: 'game_start',
+      hostId: this.hostId,
+      hostNickname: this.players.get(this.hostId)?.nickname ?? '',
+      smallBlind: this.smallBlind,
+      bigBlind: this.bigBlind,
+      maxSeats: this.maxSeats,
+      minBuyIn: this.minBuyIn,
+      maxBuyIn: this.maxBuyIn,
+      maxHands: this.maxHands,
+      seats: seated.map((s) => ({
+        seatIndex: s.seatIndex,
+        playerId: s.playerId,
+        nickname: this.players.get(s.playerId)?.nickname ?? '???',
+        isBot: this.players.get(s.playerId)?.isBot ?? false,
+        stack: s.stack,
+      })),
+    });
 
     // 开局抽牌定庄：摊开 maxSeats+2 张盖牌在桌面，由玩家各自点击抽一张，全部抽完统一揭晓
     const deck = new Deck();
@@ -718,11 +749,25 @@ export class Room {
       { smallBlind: this.smallBlind, bigBlind: this.bigBlind, handNumber: this.handNumber },
     );
     const events = this.engine.start();
-    // 私信底牌
+    // 私信底牌；同时记录完整底牌（分析用，含后续弃牌者）
+    this.holeCardsBySeat.clear();
+    const dealtHoleCards: { seatIndex: number; cards: [CardStr, CardStr] }[] = [];
     for (const s of participants) {
-      this.hooks.emitToPlayer(s.playerId, { holeCards: this.engine.getHoleCards(s.seatIndex) });
+      const cards = this.engine.getHoleCards(s.seatIndex);
+      this.hooks.emitToPlayer(s.playerId, { holeCards: cards });
+      const pair = cards as [CardStr, CardStr];
+      this.holeCardsBySeat.set(s.seatIndex, pair);
+      dealtHoleCards.push({ seatIndex: s.seatIndex, cards: pair });
     }
     this.processEvents(events);
+    this.record({
+      type: 'deal',
+      handNumber: this.handNumber,
+      dealerSeat: this.dealerSeat,
+      smallBlind: this.smallBlind,
+      bigBlind: this.bigBlind,
+      holeCards: dealtHoleCards,
+    });
   }
 
   private processEvents(events: EngineEvent[]): void {
@@ -742,6 +787,9 @@ export class Room {
     if (this.handFinalized || !this.engine) return;
     this.handFinalized = true;
     this.clearTurnTimer();
+
+    // 每手结算汇总落盘（在写回筹码、移除输光 AI 之前，确保昵称/底牌完整）
+    this.recordHandResult();
 
     // 写回筹码；处理淘汰与断线逐出
     const stacks = this.engine.finalStacks();
@@ -791,6 +839,8 @@ export class Room {
       // 无输光但可继续玩家不足 2 人（如中途断线被移出）→ 整局结束
       this.status = 'lobby';
     }
+    // 若本手触发整局结束（maxHands 到顶 / 可续玩家不足），记终局快照
+    this.recordRoomEnd();
     this.hooks.emitState();
   }
 
@@ -822,6 +872,7 @@ export class Room {
     if (this.continuablePlayers().length < 2) {
       this.status = 'lobby';
     }
+    this.recordRoomEnd();
     this.hooks.emitState();
   }
 
@@ -854,6 +905,7 @@ export class Room {
     this.dealerDraw = null;
     this.dealerSeat = -1;
     this.handFinalized = false;
+    this.recordRoomEnd();
     this.hooks.emitState();
   }
 
@@ -889,6 +941,7 @@ export class Room {
       this.clearDrawTimer();
       this.dealerDraw = null;
       this.dealerSeat = -1;
+      this.recordRoomEnd();
     }
   }
 
@@ -1103,6 +1156,89 @@ export class Room {
 
   private emit(ev: EngineEvent): void {
     this.hooks.emitEvent({ ...ev, seq: ++this.seq } as GameEvent);
+    // 对局记录：只落盘有分析价值的动作/翻牌/摊牌事件，抽牌等噪音事件跳过
+    switch (ev.type) {
+      case 'player_action':
+        this.record({
+          type: 'action',
+          handNumber: this.handNumber,
+          seatIndex: ev.seatIndex,
+          action: ev.action,
+          amount: ev.amount,
+          betTotal: ev.betTotal,
+          stackAfter: ev.stackAfter,
+          potTotal: ev.potTotal,
+        });
+        break;
+      case 'street':
+        this.record({ type: 'street', handNumber: this.handNumber, street: ev.street, board: ev.board });
+        break;
+      case 'showdown':
+        this.record({ type: 'showdown', handNumber: this.handNumber, results: ev.results });
+        break;
+    }
+  }
+
+  // ---------- 对局记录落盘 ----------
+
+  /** 补全 ts/matchId/roomCode 后追加一条 JSONL 记录（写失败不影响对局） */
+  private record(rec: HistoryPayload): void {
+    recordHistory({ ts: Date.now(), matchId: this.matchId, roomCode: this.code, ...rec } as HistoryRecord);
+  }
+
+  /** 整局终局快照（幂等，只记一次） */
+  private recordRoomEnd(): void {
+    if (this.matchEndRecorded || this.status !== 'lobby') return;
+    this.matchEndRecorded = true;
+    this.record({
+      type: 'room_ended',
+      handNumber: this.handNumber,
+      stacks: this.seats
+        .filter((s): s is Seat => s !== null)
+        .map((s) => ({
+          seatIndex: s.seatIndex,
+          playerId: s.playerId,
+          nickname: this.players.get(s.playerId)?.nickname ?? '???',
+          isBot: this.players.get(s.playerId)?.isBot ?? false,
+          stack: s.stack,
+        })),
+    });
+  }
+
+  /** 每手结算汇总落盘（分析核心：全量底牌 + 投入/赢得/净盈亏） */
+  private recordHandResult(): void {
+    if (!this.engine) return;
+    const pub = this.engine.toPublicState();
+    const awards = new Map((pub.awards ?? []).map((a) => [a.seatIndex, a]));
+    const seatStates = new Map(this.engine.toSeatStates(null).map((s) => [s.seatIndex, s]));
+    const seats = this.engine.seatIndexes.map((seatIndex) => {
+      const ss = seatStates.get(seatIndex);
+      const a = awards.get(seatIndex);
+      const won = a?.amount ?? 0;
+      const committed = ss?.committed ?? 0;
+      const seat = this.seats[seatIndex];
+      const p = seat ? this.players.get(seat.playerId) : undefined;
+      return {
+        seatIndex,
+        playerId: seat?.playerId ?? ss?.playerId ?? '',
+        nickname: p?.nickname ?? ss?.nickname ?? '???',
+        isBot: p?.isBot ?? false,
+        holeCards: this.holeCardsBySeat.get(seatIndex) ?? [],
+        committed,
+        won,
+        net: won - committed,
+        handName: a?.handName ?? null,
+        folded: ss?.hasFolded ?? false,
+      };
+    });
+    this.record({
+      type: 'hand_result',
+      handNumber: this.handNumber,
+      dealerSeat: pub.dealerSeat,
+      board: pub.board,
+      potTotal: pub.potTotal,
+      seats,
+    });
   }
 
   private clearDisconnectTimer(playerId: string): void {

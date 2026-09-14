@@ -34,6 +34,7 @@ const color = computed(() => (props.card ? suitColor(props.card) : '#16213a'));
       </div>
       <div class="face back">
         <div class="back-pattern" />
+        <slot name="back" />
       </div>
     </div>
   </div>

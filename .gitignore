@@ -6,3 +6,4 @@ Thumbs.db
 .env
 npm-debug.log*
 .secrets
+data/

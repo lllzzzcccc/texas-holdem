@@ -11,9 +11,13 @@ services:
       PORT: 3000
       HOST: 0.0.0.0
       PUBLIC_URL: ${PUBLIC_URL:-https://chammmsblog.site/texas-holdem}
+      HISTORY_DIR: /app/data/history
       AI_API_KEY: ${AI_API_KEY:-}
       AI_BASE_URL: ${AI_BASE_URL:-https://api.deepseek.com/anthropic}
       AI_MODEL: ${AI_MODEL:-deepseek-v4-flash}
+    volumes:
+      # 对局记录持久化：容器重建/重新部署后历史仍保留
+      - texas_history:/app/data/history
 
   nginx:
     image: nginx:1.27-alpine
@@ -49,3 +53,4 @@ services:
 volumes:
   letsencrypt:
   certbot-webroot:
+  texas_history:

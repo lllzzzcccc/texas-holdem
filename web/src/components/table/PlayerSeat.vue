@@ -531,7 +531,7 @@ onBeforeUnmount(() => {
 .action-bubble {
   position: absolute;
   /* 头像右侧区域：底牌在正上方、表情盘在左侧，各元素分区不堆叠 */
-  left: calc(50% + 42px);
+  left: calc(50% + 32px);
   top: 4px;
   background: rgba(255, 255, 255, 0.94);
   color: #16213a;
@@ -546,7 +546,7 @@ onBeforeUnmount(() => {
 /* 右半屏座位：气泡翻转到头像左侧，避免「小盲 10」等标识越出屏幕右缘 */
 .action-bubble.open-left {
   left: auto;
-  right: calc(50% + 42px);
+  right: calc(50% + 32px);
 }
 .action-bubble.fold {
   background: #6c757d;

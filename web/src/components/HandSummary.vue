@@ -40,6 +40,11 @@ function canClick(seatIndex: number): boolean {
   return store.isHost && isBot(seatIndex) && !isShowdown(seatIndex);
 }
 
+/** 是否在 AI 未摊牌的盖牌背面绘制「点击翻开」的眼睛提示（仅房主可见；绘制在牌背内部，翻牌时随牌背自然翻转消失） */
+function showEyeHint(seatIndex: number): boolean {
+  return store.isHost && isBot(seatIndex) && !isShowdown(seatIndex);
+}
+
 function cardTitle(seatIndex: number, cardIndex: number): string {
   if (isOwn(seatIndex) && !isShowdown(seatIndex)) {
     return isPublic(seatIndex, cardIndex) ? '点击盖上这张牌' : '点击亮出这张牌（所有人可见）';
@@ -72,7 +77,10 @@ interface Row {
   /** 净赢 = 赢得的底池 − 本手累计投入 */
   net: number;
   handName: string | null;
+  /** 真正盈利（净收益 > 0）才显示皇冠与金色边框 */
   isWinner: boolean;
+  /** 分到池但未盈利：边池返还 / 保本，不显示为赢家 */
+  isRefund: boolean;
 }
 
 const rows = computed<Row[]>(() => {
@@ -82,19 +90,22 @@ const rows = computed<Row[]>(() => {
     .filter((s) => s && (s.holeCards !== null || s.hasFolded || s.committed > 0))
     .map((s) => {
       const a = awards.get(s!.seatIndex);
+      const award = a?.amount ?? 0;
+      const net = a ? a.amount - s!.committed : 0;
       return {
         seatIndex: s!.seatIndex,
         nickname: s!.nickname,
         cards: s!.holeCards ?? [],
         folded: s!.hasFolded,
         committed: s!.committed,
-        award: a?.amount ?? 0,
-        net: a ? a.amount - s!.committed : 0,
+        award,
+        net,
         handName: a?.handName ?? null,
-        isWinner: !!a && a.amount > 0,
+        isWinner: net > 0,
+        isRefund: award > 0 && net <= 0,
       };
     })
-    .sort((a, b) => b.award - a.award || b.committed - a.committed);
+    .sort((a, b) => b.net - a.net || b.award - a.award || b.committed - a.committed);
 });
 
 const board = computed(() => game.value?.board ?? []);
@@ -120,7 +131,12 @@ const gameOver = computed(() => store.room?.status === 'lobby');
         </div>
 
         <div class="rows">
-          <div v-for="r in rows" :key="r.seatIndex" class="row" :class="{ winner: r.isWinner, folded: r.folded }">
+          <div
+            v-for="r in rows"
+            :key="r.seatIndex"
+            class="row"
+            :class="{ winner: r.isWinner, refund: r.isRefund, folded: r.folded }"
+          >
             <div class="r-main">
               <div class="r-name">
                 <span v-if="r.isWinner" class="crown">👑</span>
@@ -142,7 +158,11 @@ const gameOver = computed(() => store.room?.status === 'lobby');
                     @click="clickCard(r.seatIndex, i)"
                   >
                     <div class="card-veil" :class="{ veiled: isOwn(r.seatIndex) && !isPublic(r.seatIndex, i) }">
-                      <PlayingCard :card="c" size="mini" :face-up="isPublic(r.seatIndex, i) || isOwn(r.seatIndex)" />
+                      <PlayingCard :card="c" size="mini" :face-up="isPublic(r.seatIndex, i) || isOwn(r.seatIndex)">
+                        <template v-if="showEyeHint(r.seatIndex)" #back>
+                          <span class="reveal-hint" aria-hidden="true">👁</span>
+                        </template>
+                      </PlayingCard>
                     </div>
                   </div>
                 </template>
@@ -152,7 +172,16 @@ const gameOver = computed(() => store.room?.status === 'lobby');
             <div class="r-result">
               <template v-if="r.isWinner">
                 <div class="r-win">+{{ formatChips(r.award) }}</div>
-                <div class="r-net">收益 +{{ formatChips(r.net) }}</div>
+                <div class="r-net">
+                  收益 {{ r.net >= 0 ? '+' : '' }}{{ formatChips(r.net) }}
+                </div>
+                <div v-if="r.handName" class="r-hand">{{ r.handName }}</div>
+              </template>
+              <template v-else-if="r.isRefund">
+                <div class="r-refund">+{{ formatChips(r.award) }}</div>
+                <div class="r-net">
+                  {{ r.net === 0 ? '保本' : `收益 ${formatChips(r.net)}` }}
+                </div>
                 <div v-if="r.handName" class="r-hand">{{ r.handName }}</div>
               </template>
               <template v-else>
@@ -241,6 +270,10 @@ const gameOver = computed(() => store.room?.status === 'lobby');
   border-color: rgba(255, 215, 0, 0.55);
   background: rgba(255, 215, 0, 0.08);
 }
+.row.refund {
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+}
 .row.folded {
   opacity: 0.6;
 }
@@ -282,8 +315,22 @@ const gameOver = computed(() => store.room?.status === 'lobby');
 }
 /* 本人未亮出的牌：虚化的正面（自己认得，别人看到的是盖牌） */
 .card-veil {
+  position: relative;
   border-radius: 4px;
   transition: filter 0.25s;
+}
+/* AI 未摊牌的盖牌上的「点击翻开」眼睛提示：绘制在牌背内部，随翻牌动画与牌背一起翻转（不闪现消失） */
+.reveal-hint {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: calc(var(--w, 40px) * 0.62);
+  color: #fff;
+  opacity: 0.6;
+  pointer-events: none;
+  filter: drop-shadow(0 0 4px rgba(0, 0, 0, 0.7));
 }
 .card-veil.veiled {
   filter: blur(1.6px) saturate(0.6) brightness(0.88);
@@ -311,10 +358,18 @@ const gameOver = computed(() => store.room?.status === 'lobby');
   font-weight: 900;
   color: #ffd966;
 }
+.r-refund {
+  font-size: 17px;
+  font-weight: 900;
+  color: var(--text-dim);
+}
 .r-net {
   font-size: 12px;
   font-weight: 700;
   color: #6fd08c;
+}
+.row.refund .r-net {
+  color: var(--text-dim);
 }
 .r-hand {
   font-size: 12px;

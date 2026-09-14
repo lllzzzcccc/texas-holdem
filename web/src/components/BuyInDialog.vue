@@ -34,7 +34,9 @@ const titleText = computed(() => {
 });
 const confirmText = computed(() => (props.mode === 'rebuy' ? '确认补码' : '确认入座'));
 const hintText = computed(() => {
-  if (props.mode === 'seat') return '选好筹码后，选择自己入座或放置 AI 玩家';
+  if (props.mode === 'seat') {
+    return store.isSeated ? '已入座，可为 AI 玩家购买积分后放置' : '选好筹码后，选择自己入座或放置 AI 玩家';
+  }
   return '积分全部为虚拟积分，仅供游戏计分使用';
 });
 </script>
@@ -76,7 +78,7 @@ const hintText = computed(() => {
 
         <div class="actions">
           <template v-if="mode === 'seat'">
-            <button class="action-btn" @click="emit('confirm', amount)">自己入座</button>
+            <button v-if="!store.isSeated" class="action-btn" @click="emit('confirm', amount)">自己入座</button>
             <button class="action-btn" @click="emit('bot', amount)">AI 玩家</button>
             <button class="action-btn" @click="emit('close')">取消</button>
           </template>
