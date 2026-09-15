@@ -525,11 +525,22 @@ const drawTip = computed(() => {
   transform: translateY(-14px);
 }
 .table-outer.portrait .board {
-  /* 公共牌缩小，避免与左右两侧头像重叠 */
+  /* 兜底（不支持容器查询的旧浏览器，牌桌本身不缩放）：固定缩小，避免与左右两侧头像重叠 */
   gap: 3px;
   --card-w: 34px;
   --card-h: 47px;
   --slot-pad: 8px;
+}
+/* 容器查询可用时：竖屏公共牌也随牌桌等比缩放。加注面板出现时牌桌整体上移缩小，
+   公共牌若不跟着缩小，会被左右头像（位置按百分比随牌桌内收）遮住最外侧两张；
+   牌宽取牌桌宽约 10%（9.4cqw / 5.7cqh 与牌桌宽 min(94cqw, 57cqh) 同比例），封顶 34px。 */
+@supports (width: 1cqh) {
+  .table-outer.portrait .board {
+    gap: min(0.83cqw, 0.5cqh, 3px);
+    --card-w: min(9.4cqw, 5.7cqh, 34px);
+    --card-h: min(13cqw, 7.9cqh, 47px);
+    --slot-pad: min(2.2cqw, 1.35cqh, 8px);
+  }
 }
 .table-outer.portrait .spread-card {
   width: 28px;
@@ -548,6 +559,25 @@ const drawTip = computed(() => {
 }
 .table-outer.portrait .pot-anchor {
   top: 33%;
+}
+/* 加注面板出现（轮到操作，RoomView 给 .room 挂 action-open）时，牌桌整体上移缩小；
+   座位头像、牌堆、底池一并缩小一点，与同步缩小的公共牌保持协调。
+   用 .action-open 类而非容器查询：类直接反映「面板已打开」，不依赖浏览器对
+   容器宽高比条件的支持，触发更可靠。 */
+.room.action-open .table-outer.portrait {
+  --seat-scale: 0.55;
+}
+.room.action-open .table-outer.portrait .deck-anchor {
+  transform: translate(-50%, -50%) scale(0.6);
+}
+.room.action-open .table-outer.portrait .pot-area {
+  transform: translate(-50%, -50%) scale(0.85);
+}
+/* 座位整体被 scale 到 0.55，昵称/筹码文字随之一并缩小到难以辨认；
+   这里把字号补大，使缩放后的有效字号保持可读 */
+.room.action-open .table-outer.portrait :deep(.nick),
+.room.action-open .table-outer.portrait :deep(.stack) {
+  font-size: 16px;
 }
 .table-outer.portrait .draw-overlay {
   top: 8%;
