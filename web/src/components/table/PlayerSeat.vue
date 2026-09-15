@@ -225,6 +225,8 @@ onBeforeUnmount(() => {
   width: 130px;
   height: 116px;
   transform: translate(-50%, -50%) scale(var(--seat-scale, 1));
+  /* 父级 .seat-pos 关闭了命中测试，这里恢复本座位内容的点按（空位按钮/头像/踢出/表情盘） */
+  pointer-events: auto;
 }
 
 .empty-seat {
@@ -263,7 +265,10 @@ onBeforeUnmount(() => {
      这里显式抬高层级，让头像与表情盘始终盖住同座位的下注筹码(z2)、动作气泡(z4) */
   z-index: 10;
 }
-.seat-body.folded {
+/* 弃牌后置灰：只作用于头像/名牌，不波及表情选择盘（点开的表情菜单保持彩色） */
+.seat-body.folded .avatar,
+.seat-body.folded .plate,
+.seat-body.folded .allin-tag {
   filter: grayscale(0.9) brightness(0.6);
 }
 .seat-body.offline .plate {

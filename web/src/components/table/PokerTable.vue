@@ -102,8 +102,9 @@ function spreadStyle(i: number) {
   const total = spreadCount.value || 11;
   const center = (total - 1) / 2;
   const offset = i - center; // -center .. +center
-  // 相邻牌固定步长（px），任一人数都保持紧凑；竖屏牌更小步长更窄（与 .spread-card 尺寸匹配）
-  const step = portrait.value ? 30 : 38;
+  // 相邻牌固定步长（px）：步长小于牌宽，相邻牌重叠成扇，任一人数都紧凑地收在台面内；
+  // 竖屏牌更窄（28px 宽）步长更小，避免 9/10 座时牌堆横向溢出牌桌
+  const step = portrait.value ? 20 : 28;
   // 两端轻微上翘 + 外旋的弧线
   const y = offset * offset * (portrait.value ? 0.5 : 0.9);
   const rot = offset * 2.4;
@@ -382,6 +383,8 @@ const drawTip = computed(() => {
 }
 .spread-card.pickable:hover {
   margin-top: -10px;
+  /* 牌重叠成扇后，悬停的牌抬到最前，避免被右侧邻居压住 */
+  z-index: 100 !important;
   box-shadow:
     0 0 0 2px var(--gold),
     0 6px 14px rgba(0, 0, 0, 0.55);
@@ -454,7 +457,14 @@ const drawTip = computed(() => {
 
 .seat-pos {
   position: absolute;
+  /* 关键：显式置 0，避免盒子被 shrink-wrap 成子级 .seat-wrap 的布局尺寸 130×116
+     （transform: scale 不影响布局，只缩小渲染）。座位一多，相邻座位的这个透明盒会互相
+     重叠、吞掉相邻座位（尤其底部座位）的点按，所以把它压成 0×0 的点锚。 */
+  width: 0;
+  height: 0;
   z-index: 5;
+  /* 兜底：点按只交给 .seat-wrap 内的实际内容（空位按钮/头像），本包裹盒不参与命中 */
+  pointer-events: none;
 }
 
 .anim-layer {
@@ -511,12 +521,15 @@ const drawTip = computed(() => {
 /* 竖屏手机：窄高椭圆 + 最小座位缩放 */
 .table-outer.portrait {
   --seat-scale: 0.65;
+  /* 整桌向上平移，给底部座位与下方控制条让出空间 */
+  transform: translateY(-14px);
 }
 .table-outer.portrait .board {
-  gap: 4px;
-  --card-w: 42px;
-  --card-h: 58px;
-  --slot-pad: 10px;
+  /* 公共牌缩小，避免与左右两侧头像重叠 */
+  gap: 3px;
+  --card-w: 34px;
+  --card-h: 47px;
+  --slot-pad: 8px;
 }
 .table-outer.portrait .spread-card {
   width: 28px;

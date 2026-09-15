@@ -54,7 +54,11 @@ export const useRoomStore = defineStore('room', {
     /** 底部手牌面板是否展开（发牌后默认展示，点击「看牌」按钮切换） */
     cardsVisible: false,
     yourTurn: null as LegalActions | null,
+    /** 已收到但暂缓展示的行动面板（枪口位翻前会先于发牌动画结束收到 yourTurn） */
+    pendingTurn: null as LegalActions | null,
     socketConnected: false,
+    /** 邀请二维码基地址：本机以 localhost 访问时替换为局域网 IP（手机才能扫码加入） */
+    lanBase: '' as string,
     errorMsg: '' as string,
     banners: [] as Banner[],
     lobbyRooms: [] as RoomSummary[],
@@ -132,7 +136,8 @@ export const useRoomStore = defineStore('room', {
     },
     inviteUrl(state): string {
       if (!state.room) return '';
-      return `${location.origin}${location.pathname}#/room/${state.room.code}`;
+      const base = state.lanBase || `${location.origin}${location.pathname}`;
+      return `${base}#/room/${state.room.code}`;
     },
     /** 我是否已被淘汰（座位保留但 0 筹码且游戏进行中） */
     eliminated(): boolean {
@@ -146,6 +151,17 @@ export const useRoomStore = defineStore('room', {
     wireSocket() {
       if (socketWired) return;
       socketWired = true;
+      // 本机以 localhost 打开时，向服务端探测局域网地址，用于邀请二维码（手机扫码需 IP 而非 localhost）
+      if (['localhost', '127.0.0.1', '::1', '[::1]'].includes(location.hostname)) {
+        fetch(`${location.origin}${location.pathname}api/lan`)
+          .then((r) => r.json())
+          .then((d: { urls?: string[] }) => {
+            if (d.urls?.length) this.lanBase = d.urls[0];
+          })
+          .catch(() => {
+            /* 探测失败回退到 location.origin，不影响游戏 */
+          });
+      }
       socket.on('connect', () => {
         this.socketConnected = true;
         // 断线后 socket 自动重连（如移动端切去微信再回来）：这是新连接、服务端 session 已清空，
@@ -162,7 +178,10 @@ export const useRoomStore = defineStore('room', {
         const mySeatIdx = state.seats.find((s) => s?.playerId === this.playerId)?.seatIndex ?? null;
         const stillMyTurn =
           state.status === 'playing' && !!state.game && mySeatIdx !== null && state.game.actingSeat === mySeatIdx;
-        if (!stillMyTurn) this.yourTurn = null;
+        if (!stillMyTurn) {
+          this.yourTurn = null;
+          this.pendingTurn = null;
+        }
         // 手牌号变化且动画队列空闲：说明是重连/快照而非事件流 → 直接跳到最终画面
         const hand = state.game?.handNumber ?? 0;
         if (hand > 0 && this.currentHand !== hand && queueIdle()) {
@@ -179,8 +198,8 @@ export const useRoomStore = defineStore('room', {
         // 重连/加入则交由 snapGates 直接亮牌，避免「刚开局就裸亮两张牌」。
       });
       socket.on(EV.YourTurn, (legal: LegalActions) => {
-        this.yourTurn = legal;
-        sfx.yourTurn();
+        this.pendingTurn = legal;
+        this.applyTurnIfReady();
       });
       socket.on(EV.LobbyRooms, (rooms: RoomSummary[]) => {
         this.lobbyRooms = rooms;
@@ -249,12 +268,25 @@ export const useRoomStore = defineStore('room', {
       }
     },
 
+    /** 把暂缓的行动面板真正亮出来：等两张底牌发完（dealtSeats 写入我的座位）后再显示，
+     *  避免枪口位翻前「牌还在飞、决策面板就先弹出来」。发牌动画结束（deal_hole）会调用本方法。 */
+    applyTurnIfReady() {
+      const legal = this.pendingTurn;
+      if (!legal) return;
+      const mySeat = this.mySeat;
+      if (mySeat !== null && !this.dealtSeats.includes(mySeat)) return;
+      this.pendingTurn = null;
+      this.yourTurn = legal;
+      sfx.yourTurn();
+    },
+
     resetForRoom() {
       this.room = null;
       this.joined = false;
       this.holeCards = [];
       this.cardsVisible = false;
       this.yourTurn = null;
+      this.pendingTurn = null;
       this.banners = [];
       this.actionLog = [];
       resetAnimation();
@@ -434,6 +466,7 @@ export const useRoomStore = defineStore('room', {
 
     act(action: 'fold' | 'check' | 'call' | 'raise', amount?: number) {
       this.yourTurn = null; // 立即收起面板，防重复点击
+      this.pendingTurn = null;
       socket.emit(EV.GameAction, { action, amount }, (r: { ok: true } | ApiErr) => {
         if (isErr(r)) this.toast(r.message);
       });

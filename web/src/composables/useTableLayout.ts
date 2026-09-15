@@ -23,11 +23,10 @@ const LANDSCAPE_RX = 48.5;
 const LANDSCAPE_RY = 47.115;
 /**
  * 竖屏手机：窄高椭圆（座位整体缩小，见 PokerTable --seat-scale）。
- * rx 取 44% 而非外轨半轴 48.387%：把左右两侧座位向内收一点，让头像上的
- * D 标记 / ALL-IN 角标 / 离线圆点等 tab 不再越出屏幕或贴边。
- * （44% × 620 = 272.8px，正好落在内轨 railInner.rx = 272 上，视觉仍贴合桌面。）
+ * rx 取 46%：比外轨半轴 48.387% 略收一点，兼顾两侧座位 tab 不越出屏幕；
+ * 同时比早期 44% 略外扩，配合公共牌缩小，避免左右头像与公共牌重叠。
  */
-const PORTRAIT_RX = 44;
+const PORTRAIT_RX = 46;
 const PORTRAIT_RY = 48;
 
 /** 是否使用竖屏牌桌（窄屏且竖向） */

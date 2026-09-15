@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, utimesSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { initHistoryRecorder, recordHistory } from '../src/history/recorder.js';
+import { initHistoryRecorder, recordHistory, cleanupHistory } from '../src/history/recorder.js';
 import type { HistoryRecord } from '../src/history/types.js';
 
 describe('对局记录 JSONL 落盘', () => {
@@ -84,6 +84,41 @@ describe('对局记录 JSONL 落盘', () => {
 
       const otherLines = readFileSync(path.join(dir, 'OTHER1.jsonl'), 'utf8').trimEnd().split('\n');
       expect(otherLines).toHaveLength(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('清除超过保留期的对局记录文件', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'th-history-'));
+    try {
+      initHistoryRecorder(dir);
+      const base: HistoryRecord = {
+        ts: 0,
+        matchId: 'm-clean',
+        roomCode: 'CLEAN',
+        type: 'game_start',
+        hostId: 'p1',
+        hostNickname: 'lzc',
+        smallBlind: 10,
+        bigBlind: 20,
+        maxSeats: 9,
+        minBuyIn: 400,
+        maxBuyIn: 4000,
+        maxHands: 0,
+        seats: [],
+      };
+      recordHistory({ ...base, roomCode: 'OLD01' });
+      recordHistory({ ...base, roomCode: 'NEW01' });
+
+      // 人为把 OLD01 的最后修改时间调到 20 天前，模拟过期
+      const oldTime = new Date(Date.now() - 20 * 24 * 60 * 60 * 1000);
+      utimesSync(path.join(dir, 'OLD01.jsonl'), oldTime, oldTime);
+
+      const removed = cleanupHistory(14 * 24 * 60 * 60 * 1000);
+      expect(removed).toBe(1);
+      expect(existsSync(path.join(dir, 'OLD01.jsonl'))).toBe(false);
+      expect(existsSync(path.join(dir, 'NEW01.jsonl'))).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -188,6 +188,8 @@ async function handle(ev: GameEvent, store: Store): Promise<void> {
       // 发牌动作全部结束后，若本人也在发牌名单里，再亮出自己的两张底牌
       const me = store.mySeat;
       store.cardsVisible = me !== null && ev.seatIndexes.includes(me);
+      // 底牌发完：把枪口位暂缓的决策面板亮出来（等发牌动画结束再显示，见 store.applyTurnIfReady）
+      store.applyTurnIfReady();
       await sleep(350);
       break;
     }

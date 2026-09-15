@@ -111,14 +111,16 @@ const actionOpen = computed(() => !!store.yourTurn);
 
 /** 下注街阶段集合：仅这些阶段本人会需要翻看自己的底牌 */
 const CARD_VIEW_PHASES = new Set(['preflop', 'flop', 'turn', 'river']);
-/** 是否显示左下角「看牌」按钮：本人在当前手牌中、还持有底牌（弃牌后仍显示，但整体置灰） */
+/** 是否显示左下角「看牌」按钮：本人在当前手牌中、还持有底牌，且两张底牌已发完
+    （弃牌后仍显示，但整体置灰） */
 const canViewCards = computed(() => {
   const g = store.room?.game;
   const mySeat = store.mySeat;
   if (!g || store.room?.status !== 'playing' || mySeat === null) return false;
   if (!CARD_VIEW_PHASES.has(g.phase)) return false;
   const seat = store.room.seats[mySeat];
-  return !!seat && store.holeCards.length > 0;
+  // dealtSeats 在发牌动画播完（deal_hole 两圈发完）后才写入我的座位；用它作「两张牌已发完」的闸门
+  return !!seat && store.holeCards.length > 0 && store.dealtSeats.includes(mySeat);
 });
 /** 我是否已弃牌：弃牌后左下角图标与展开的底牌整体置灰，表示这两张牌已弃掉 */
 const iFolded = computed(() => {
@@ -428,8 +430,8 @@ function confirmLeave() {
             <strong class="code-clickable" title="点击复制房间号" @click="copyCode">{{ store.room?.code }}</strong>
             <span v-if="store.room?.isPrivate" class="priv-tag" title="私密房间：不出现在大厅，仅凭邀请加入">🔒</span>
           </span>
+          <button class="room-info-btn" title="房间信息" @click="infoOpen = true">❕</button>
           <span v-if="store.isHost" class="host-tag" title="你是房主">房主</span>
-          <span class="blinds">盲注 {{ store.room?.smallBlind }}/{{ store.room?.bigBlind }}</span>
           <span v-if="store.room?.game?.handNumber" class="hand-no">
             第 {{ store.room.game.handNumber }}{{ store.room.maxHands > 0 ? `/${store.room.maxHands}` : '' }} 手
           </span>
@@ -455,17 +457,9 @@ function confirmLeave() {
           <span class="mi-icon">{{ soundOn ? '🔊' : '🔇' }}</span>
           <span>{{ soundOn ? '静音' : '开启音效' }}</span>
         </button>
-        <button class="menu-item" :class="{ active: logOpen }" @click="logOpen = !logOpen; menuOpen = false">
-          <span class="mi-icon">📝</span>
-          <span>记录</span>
-        </button>
         <button class="menu-item" @click="qrOpen = true; menuOpen = false">
           <span class="mi-icon">🔗</span>
           <span>邀请</span>
-        </button>
-        <button class="menu-item" @click="infoOpen = true; menuOpen = false">
-          <span class="mi-icon">ℹ️</span>
-          <span>房间信息</span>
         </button>
         <button
           v-if="store.isHost"
@@ -593,6 +587,26 @@ function confirmLeave() {
       </div>
     </div>
 
+    <!-- 记录侧栏把手：贴屏幕右缘（左半圆、右端嵌入右缘），点击从右侧弹出对局记录 -->
+    <button
+      v-if="!logOpen"
+      class="log-handle"
+      aria-label="打开对局记录"
+      @click="logOpen = true"
+    >
+      <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+        <path
+          d="M20 12H4 M10 6l-6 6 6 6"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="3"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        />
+      </svg>
+      <span class="log-tip">打开对局记录</span>
+    </button>
+
     <!-- 对局记录侧边栏 -->
     <ActionLog :open="logOpen" @close="logOpen = false" />
 
@@ -706,6 +720,37 @@ function confirmLeave() {
   margin-left: 4px;
   font-size: 13px;
 }
+/* 房间号右侧的圆形信息按钮：点击打开房间信息弹窗 */
+.room-info-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  margin: 0 -3px;
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  box-shadow: none;
+  color: #fff;
+  font-size: 9px;
+  line-height: 1;
+  outline: none;
+}
+/* 悬停/点击/聚焦都不改变外观，保持小圆钮稳定 */
+.room-info-btn:hover,
+.room-info-btn:active,
+.room-info-btn:focus,
+.room-info-btn:focus-visible {
+  border-color: rgba(255, 255, 255, 0.24);
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  transform: none;
+  filter: none;
+  outline: none;
+}
 .host-tag {
   font-size: 11px;
   font-weight: 700;
@@ -716,7 +761,6 @@ function confirmLeave() {
   margin-left: 2px;
   line-height: 16px;
 }
-.blinds,
 .hand-no {
   font-size: 12px;
   color: var(--text-dim);
@@ -724,9 +768,6 @@ function confirmLeave() {
   padding: 0 10px;
   border-radius: 8px;
   line-height: 20px;
-}
-.blinds {
-  line-height: 18px;
 }
 .member-count {
   font-size: 11px;
@@ -769,6 +810,63 @@ function confirmLeave() {
 }
 .danmaku-fab.active {
   background: linear-gradient(180deg, #4cc9f0, #1d8fb8);
+}
+
+/* 记录侧栏把手：右缘靠上的浮层按钮——白底圆角胶囊，内嵌向左箭头，点击从右侧弹出对局记录 */
+.log-handle {
+  position: fixed;
+  right: -26px; /* 横置胶囊一半嵌入右缘：右半藏到屏幕外，左半露出 */
+  top: 90px;
+  z-index: 94;
+  width: 52px;
+  height: 26px;
+  padding: 0 26px 0 0; /* 内容收缩到可见的左半胶囊内，箭头居中 */
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  background: rgba(12, 24, 18, 0.92);
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.25);
+  color: #d8c690;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition:
+    background 0.15s,
+    color 0.15s,
+    box-shadow 0.15s;
+}
+/* 覆盖全局 button 的 hover/active 位移与增亮，保持把手贴合右缘 */
+button.log-handle:hover,
+button.log-handle:active {
+  transform: none;
+  filter: none;
+  background: rgba(20, 36, 27, 0.94);
+  color: #e8d4a0;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+}
+/* 悬停提示：把手位于右缘，气泡贴在把手左侧显示 */
+.log-tip {
+  position: absolute;
+  right: calc(100% + 8px);
+  top: 50%;
+  transform: translateY(-50%);
+  white-space: nowrap;
+  background: rgba(18, 24, 30, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 6px 10px;
+  border-radius: 8px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+}
+@media (hover: hover) and (pointer: fine) {
+  .log-handle:hover .log-tip {
+    opacity: 1;
+  }
 }
 
 /* 看牌入口：左下角 V 形两张牌背图标（无文字、无边框底色），与弹幕按钮左右对称 */
@@ -974,10 +1072,6 @@ function confirmLeave() {
 .menu-item:hover {
   background: rgba(255, 255, 255, 0.1);
 }
-.menu-item.active {
-  color: var(--gold);
-  background: rgba(255, 215, 0, 0.12);
-}
 .menu-item.danger-text {
   color: #ff8080;
 }
@@ -1086,7 +1180,6 @@ function confirmLeave() {
   .topbar {
     font-size: 12px;
   }
-  .blinds,
   .hand-no {
     font-size: 11px;
     padding: 0 8px;
@@ -1095,6 +1188,11 @@ function confirmLeave() {
     font-size: 10px;
     padding: 0 6px;
     border-radius: 5px;
+  }
+  .room-info-btn {
+    width: 14px;
+    height: 14px;
+    font-size: 8px;
   }
   .menu-toggle {
     padding: 5px 10px;

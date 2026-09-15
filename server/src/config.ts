@@ -6,6 +6,8 @@ export const config = {
   publicUrl: process.env.PUBLIC_URL ?? 'http://localhost:3000',
   /** 对局记录 JSONL 落盘目录（每房间一个 <code>.jsonl） */
   historyDir: process.env.HISTORY_DIR?.trim() || path.resolve(process.cwd(), 'data/history'),
+  /** 对局记录保留天数：超过该天数的历史文件会被后台任务自动清除 */
+  historyRetentionDays: Number(process.env.HISTORY_RETENTION_DAYS ?? 14),
   /** 每回合行动时限 */
   turnTimeoutMs: Number(process.env.TURN_TIMEOUT_MS ?? 30_000),
   /** 一手结束后自动开下一手的间隔（留给动画播放） */
