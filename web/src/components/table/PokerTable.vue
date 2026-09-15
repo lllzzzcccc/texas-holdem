@@ -245,7 +245,7 @@ const drawTip = computed(() => {
     aspect-ratio: 1000 / 560;
   }
   .table-outer.portrait {
-    width: min(94%, calc(92cqh * 0.62));
+    width: min(96%, calc(94cqh * 0.62));
     aspect-ratio: 620 / 1000;
   }
 }
@@ -527,19 +527,19 @@ const drawTip = computed(() => {
 .table-outer.portrait .board {
   /* 兜底（不支持容器查询的旧浏览器，牌桌本身不缩放）：固定缩小，避免与左右两侧头像重叠 */
   gap: 3px;
-  --card-w: 34px;
-  --card-h: 47px;
-  --slot-pad: 8px;
+  --card-w: 38px;
+  --card-h: 52px;
+  --slot-pad: 9px;
 }
 /* 容器查询可用时：竖屏公共牌也随牌桌等比缩放。加注面板出现时牌桌整体上移缩小，
    公共牌若不跟着缩小，会被左右头像（位置按百分比随牌桌内收）遮住最外侧两张；
-   牌宽取牌桌宽约 10%（9.4cqw / 5.7cqh 与牌桌宽 min(94cqw, 57cqh) 同比例），封顶 34px。 */
+   牌宽取牌桌宽约 10%（9.6cqw / 5.8cqh 与牌桌宽 min(96cqw, 58cqh) 同比例），封顶 38px。 */
 @supports (width: 1cqh) {
   .table-outer.portrait .board {
-    gap: min(0.83cqw, 0.5cqh, 3px);
-    --card-w: min(9.4cqw, 5.7cqh, 34px);
-    --card-h: min(13cqw, 7.9cqh, 47px);
-    --slot-pad: min(2.2cqw, 1.35cqh, 8px);
+    gap: min(0.85cqw, 0.51cqh, 3px);
+    --card-w: min(9.6cqw, 5.8cqh, 38px);
+    --card-h: min(13.3cqw, 8cqh, 52px);
+    --slot-pad: min(2.3cqw, 1.4cqh, 9px);
   }
 }
 .table-outer.portrait .spread-card {
@@ -572,6 +572,31 @@ const drawTip = computed(() => {
 }
 .room.action-open .table-outer.portrait .pot-area {
   transform: translate(-50%, -50%) scale(0.85);
+}
+/* 面板打开时牌桌变「圆」一点：宽高比从 620/1000 调到 620/800（更宽）。
+   面板升起后牌桌区变矮，若保持窄椭圆，中部横向被压得很窄、公共牌只能很小；
+   调圆后中部更宽，公共牌得以放大而不被左右头像遮挡。 */
+@supports (width: 1cqh) {
+  .room.action-open .table-outer.portrait {
+    width: min(96%, calc(94cqh * 0.775));
+    aspect-ratio: 620 / 800;
+  }
+}
+/* 面板打开时公共牌进一步放大（牌宽仍约 10% 牌桌宽，但牌桌更宽，故牌更大） */
+.room.action-open .table-outer.portrait .board {
+  /* 兜底（不支持容器查询的旧浏览器）：固定放大 */
+  gap: 3px;
+  --card-w: 42px;
+  --card-h: 58px;
+  --slot-pad: 10px;
+}
+@supports (width: 1cqh) {
+  .room.action-open .table-outer.portrait .board {
+    gap: min(0.85cqw, 0.64cqh, 3px);
+    --card-w: min(9.6cqw, 7.3cqh, 42px);
+    --card-h: min(13.3cqw, 10.1cqh, 58px);
+    --slot-pad: min(2.3cqw, 1.8cqh, 10px);
+  }
 }
 /* 座位整体被 scale 到 0.55，昵称/筹码文字随之一并缩小到难以辨认；
    这里把字号补大，使缩放后的有效字号保持可读 */
