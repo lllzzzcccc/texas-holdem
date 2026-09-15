@@ -13,8 +13,13 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    // 允许局域网访问（手机扫码入局需从同一 Wi-Fi 访问 Vite 前端）
+    host: true,
     proxy: {
       // 后端原生监听带前缀的路径，原样转发即可
+      '/texas-holdem/api': {
+        target: 'http://localhost:3000',
+      },
       '/texas-holdem/socket.io': {
         target: 'http://localhost:3000',
         ws: true,

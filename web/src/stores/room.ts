@@ -156,7 +156,11 @@ export const useRoomStore = defineStore('room', {
         fetch(`${location.origin}${location.pathname}api/lan`)
           .then((r) => r.json())
           .then((d: { urls?: string[] }) => {
-            if (d.urls?.length) this.lanBase = d.urls[0];
+            if (!d.urls?.length) return;
+            // 后端探测到的是它自己的端口(3000)，但 dev 下前端跑在 Vite(5173)；
+            // 用后端探到的局域网 IP + 前端自己的端口，手机才能真正连到前端页面。
+            const u = new URL(d.urls[0]);
+            this.lanBase = `${location.protocol}//${u.hostname}:${location.port}${location.pathname}`;
           })
           .catch(() => {
             /* 探测失败回退到 location.origin，不影响游戏 */
