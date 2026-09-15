@@ -40,7 +40,7 @@ const canSit = computed(
 const inward = computed(() => inwardVector(props.displayPos, store.room?.maxSeats ?? 9));
 const betStyle = computed(() => {
   const d = inward.value;
-  const dist = props.displayPos === 0 ? 100 : 88;
+  const dist = props.displayPos === 0 ? 72 : 60;
   return {
     transform: `translate(calc(-50% + ${(d.dx * dist).toFixed(0)}px), calc(-50% + ${(d.dy * dist).toFixed(0)}px))`,
   };
@@ -536,13 +536,13 @@ onBeforeUnmount(() => {
 .action-bubble {
   position: absolute;
   /* 头像右侧区域：底牌在正上方、表情盘在左侧，各元素分区不堆叠 */
-  left: calc(50% + 32px);
-  top: 4px;
+  left: calc(50% + 26px);
+  top: 12px;
   background: rgba(255, 255, 255, 0.94);
   color: #16213a;
-  font-size: 12px;
+  font-size: 10px;
   font-weight: 700;
-  padding: 3px 10px;
+  padding: 2px 6px;
   border-radius: 12px;
   white-space: nowrap;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
@@ -551,7 +551,7 @@ onBeforeUnmount(() => {
 /* 右半屏座位：气泡翻转到头像左侧，避免「小盲 10」等标识越出屏幕右缘 */
 .action-bubble.open-left {
   left: auto;
-  right: calc(50% + 32px);
+  right: calc(50% + 26px);
 }
 .action-bubble.fold {
   background: #6c757d;
